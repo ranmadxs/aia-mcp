@@ -1,0 +1,20 @@
+[tool.poetry]
+name = "aia-mcp"
+version = "0.1.0-alpha.1"
+description = "Servidor MCP para el agente aia (amanda-IA)"
+readme = "README.md"
+packages = [
+    {include = "temperatura"},
+    {include = "mcp_cli"},
+]
+
+[tool.poetry.scripts]
+mcp = "mcp_cli.cli:main"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+mcp = ">=1.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
