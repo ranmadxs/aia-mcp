@@ -11,9 +11,12 @@ aia-mcp/
 ├── mcp_cli/           # CLI para ejecutar servidores
 ├── specs/
 │   └── SPEC_TEMPERATURA.md
-└── temperatura/
+├── temperatura/       # get_temperature (ciudades)
+│   ├── __init__.py
+│   └── server.py
+└── tinaja/            # acumulador/estanque - litros, porcentaje
     ├── __init__.py
-    └── server.py    # Servidor MCP - get_temperature
+    └── server.py
 ```
 
 Cada servidor MCP vive en su propio directorio. Ejecuta cualquiera con `poetry run mcp <servidor>`.
@@ -37,10 +40,15 @@ Desde el directorio `aia-mcp/`:
 ```bash
 poetry run mcp                    # temperatura (por defecto, stdio)
 poetry run mcp temperatura        # explícito
+poetry run mcp tinaja             # acumulador/estanque (litros, %)
 poetry run mcp --list             # listar servidores disponibles
 
 # Modo HTTP (para conexión remota)
-poetry run mcp temperatura --http   # o -H
+poetry run mcp temperatura --http   # puerto 8001
+poetry run mcp tinaja --http       # puerto 8003
+
+# Levantar todos los servidores
+poetry run mcp all --http
 ```
 
 - **stdio** (por defecto): para Cursor, Claude Desktop, etc.
@@ -84,3 +92,18 @@ Obtiene la temperatura actual de una ciudad (valores simulados).
 - **Retorno:** String con la temperatura
 
 Ciudades soportadas: Santiago, Buenos Aires, Lima, Bogotá, Madrid, New York, Londres, Tokio.
+
+### Tinaja (acumulador / estanque)
+
+- **get_lectura_actual()**: Obtiene litros y porcentaje del acumulador en tiempo real. Usa MQTT (`MQTT_HOST`, `MQTT_TOPIC_OUT`) o `TINAJA_ESTADO_URL` como fallback. Si no hay datos, devuelve un cálculo de ejemplo.
+- **calculate_tinaja_level(distance)**: Calcula litros y porcentaje desde la distancia del sensor (cm).
+- **get_tinaja_config()**: Configuración del estanque y estado MQTT.
+
+Variables en `.env`: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_OUT`. Fallback HTTP: `TINAJA_ESTADO_URL`.
+
+### Wahapedia (Warhammer 40K)
+
+- **get_unit_stats(query, faction)**: Estadísticas de una unidad.
+- **search_wahapedia(query)**: Búsqueda en español.
+
+Cache: config en `.aia/mcp.json` → `wahapedia.cache` (`enabled`, `dir`, `ttlDays`). Default 60 días. Guarda en `.aia/cache/wahapedia/`.

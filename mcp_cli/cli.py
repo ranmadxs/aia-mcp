@@ -4,17 +4,24 @@ import logging
 import multiprocessing
 import os
 import sys
+import time
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Registro: nombre -> (módulo, atributo FastMCP)
 SERVERS: dict[str, tuple[str, str]] = {
     "temperatura": ("temperatura.server", "mcp"),
     "wahapedia": ("wahapedia.server", "mcp"),
+    "tinaja": ("tinaja.server", "mcp"),
 }
 
 # Puerto HTTP por servidor
 SERVER_PORTS: dict[str, int] = {
     "temperatura": 8001,
     "wahapedia": 8002,
+    "tinaja": 8003,
 }
 
 # Default HTTP
@@ -23,28 +30,33 @@ DEFAULT_HTTP_HOST = "0.0.0.0"
 
 def _run_http_server(server_name: str) -> None:
     """Ejecuta un servidor HTTP en el proceso actual (para multiprocessing)."""
-    os.environ.setdefault("FASTMCP_HOST", DEFAULT_HTTP_HOST)
-    os.environ["FASTMCP_PORT"] = str(SERVER_PORTS[server_name])
-    os.environ.setdefault("FASTMCP_LOG_LEVEL", "DEBUG")
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(levelname)s %(name)s: %(message)s",
-        stream=sys.stderr,
-        force=True,
-    )
-    module_name, attr = SERVERS[server_name]
-    module = __import__(module_name, fromlist=[attr])
-    mcp = getattr(module, attr)
-    import uvicorn
-    from mcp_cli.logging_middleware import RequestLoggingMiddleware
-    app = mcp.streamable_http_app()
-    app = RequestLoggingMiddleware(app)
-    uvicorn.run(
-        app,
-        host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
-        port=SERVER_PORTS[server_name],
-        log_level="debug",
-    )
+    try:
+        os.environ.setdefault("FASTMCP_HOST", DEFAULT_HTTP_HOST)
+        os.environ["FASTMCP_PORT"] = str(SERVER_PORTS[server_name])
+        os.environ.setdefault("FASTMCP_LOG_LEVEL", "INFO")
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(message)s",
+            stream=sys.stderr,
+            force=True,
+        )
+        logging.getLogger("uvicorn").setLevel(logging.WARNING)
+        module_name, attr = SERVERS[server_name]
+        module = __import__(module_name, fromlist=[attr])
+        mcp = getattr(module, attr)
+        import uvicorn
+        from mcp_cli.logging_middleware import RequestLoggingMiddleware
+        app = mcp.streamable_http_app()
+        app = RequestLoggingMiddleware(app, server_name=server_name)
+        uvicorn.run(
+            app,
+            host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
+            port=SERVER_PORTS[server_name],
+            log_level="warning",
+        )
+    except Exception as e:
+        print(f"Error en {server_name}: {e}", file=sys.stderr)
+        raise
 
 
 def main() -> None:
@@ -80,9 +92,11 @@ def main() -> None:
             sys.exit(1)
         procs = []
         for name in SERVERS:
+            print(f"Iniciando {name} :{SERVER_PORTS[name]}...", flush=True)
             p = multiprocessing.Process(target=_run_http_server, args=(name,))
             p.start()
             procs.append((name, p))
+            time.sleep(0.5)  # Evita conflictos al bindear puertos
         print(f"MCP HTTP: {', '.join(f'{n} :{SERVER_PORTS[n]}' for n in SERVERS)}")
         print("Ctrl+C para detener todos")
         try:
@@ -106,25 +120,26 @@ def main() -> None:
     if use_http:
         port = os.environ.get("FASTMCP_PORT", "8001")
         print(f"MCP HTTP en http://{DEFAULT_HTTP_HOST}:{port}/mcp")
-        # DEBUG logs: URI y request body
-        os.environ.setdefault("FASTMCP_LOG_LEVEL", "DEBUG")
+        # Log: nombre MCP + tool + params
+        os.environ.setdefault("FASTMCP_LOG_LEVEL", "INFO")
         logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(levelname)s %(name)s: %(message)s",
+            level=logging.INFO,
+            format="%(message)s",
             stream=sys.stderr,
             force=True,
         )
+        logging.getLogger("uvicorn").setLevel(logging.WARNING)
         import uvicorn
 
         from mcp_cli.logging_middleware import RequestLoggingMiddleware
 
         app = mcp.streamable_http_app()
-        app = RequestLoggingMiddleware(app)
+        app = RequestLoggingMiddleware(app, server_name=server_name)
         uvicorn.run(
             app,
             host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
             port=int(port),
-            log_level="debug",
+            log_level="warning",
         )
     else:
         mcp.run(transport="stdio")

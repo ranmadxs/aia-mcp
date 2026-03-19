@@ -1,5 +1,6 @@
-"""Middleware para log DEBUG de URI y request en aia-mcp."""
+"""Middleware para log: nombre MCP + tool + parámetros ejecutados."""
 
+import json
 import logging
 
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -8,10 +9,11 @@ logger = logging.getLogger("mcp_cli")
 
 
 class RequestLoggingMiddleware:
-    """ASGI middleware que loguea en DEBUG: method, path, query, headers y body."""
+    """ASGI middleware que loguea solo: MCP name, tool name y params."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, server_name: str = "mcp") -> None:
         self.app = app
+        self.server_name = server_name
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -19,31 +21,31 @@ class RequestLoggingMiddleware:
             return
 
         method = scope.get("method", "")
-        path = scope.get("path", "")
-        query = scope.get("query_string", b"").decode("utf-8", errors="replace")
-        uri = f"{path}" + (f"?{query}" if query else "")
-
-        logger.debug(">>> Request URI: %s %s", method, uri)
-
-        # Leer body (solo para POST/PUT/PATCH)
-        if method in ("POST", "PUT", "PATCH"):
-            body_chunks: list[bytes] = []
-
-            async def receive_with_log() -> dict:
-                msg = await receive()
-                if msg["type"] == "http.request":
-                    body_chunks.append(msg.get("body", b""))
-                    if not msg.get("more_body", False):
-                        body = b"".join(body_chunks)
-                        try:
-                            if body:
-                                body_str = body.decode("utf-8", errors="replace")
-                                preview = body_str[:2000] + ("..." if len(body_str) > 2000 else "")
-                                logger.debug(">>> Request body: %s", preview)
-                        except Exception:
-                            logger.debug(">>> Request body: <binary %d bytes>", len(body))
-                return msg
-
-            await self.app(scope, receive_with_log, send)
-        else:
+        if method not in ("POST", "PUT", "PATCH"):
             await self.app(scope, receive, send)
+            return
+
+        body_chunks: list[bytes] = []
+
+        async def receive_with_log() -> dict:
+            msg = await receive()
+            if msg["type"] == "http.request":
+                body_chunks.append(msg.get("body", b""))
+                if not msg.get("more_body", False):
+                    body = b"".join(body_chunks)
+                    if body:
+                        try:
+                            data = json.loads(body.decode("utf-8", errors="replace"))
+                            m = data.get("method", "")
+                            params = data.get("params", {})
+                            if m == "tools/call":
+                                tool_name = params.get("name", "?")
+                                args = params.get("arguments", {})
+                                logger.info("%s: %s %s", self.server_name, tool_name, args)
+                            else:
+                                logger.info("%s: %s", self.server_name, m or "request")
+                        except (json.JSONDecodeError, TypeError):
+                            logger.info("%s: <body %d bytes>", self.server_name, len(body))
+            return msg
+
+        await self.app(scope, receive_with_log, send)

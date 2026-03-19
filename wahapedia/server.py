@@ -1,13 +1,19 @@
 """Servidor MCP Wahapedia - consulta estadísticas de unidades WH40K desde wahapedia.ru."""
 
+import json
+import logging
 import os
 import re
 from pathlib import Path
 
 import httpx
+
+logger = logging.getLogger("wahapedia")
 import tomllib
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
+
+from wahapedia.cache import get as cache_get, set_ as cache_set
 
 mcp = FastMCP(
     "wahapedia",
@@ -63,8 +69,16 @@ def _normalize_query(q: str) -> str:
 
 
 def _get_unit_list(faction: str) -> list[str]:
-    """Obtiene lista de unidades de una facción desde Wahapedia."""
+    """Obtiene lista de unidades de una facción desde Wahapedia (con cache)."""
+    cached = cache_get("unit_list", faction)
+    if cached is not None:
+        try:
+            logger.info("Cache request GET: unit_list %s", faction)
+            return json.loads(cached)
+        except Exception:
+            pass
     url = f"{BASE_URL}/{EDITION}/factions/{faction}/"
+    logger.info("Http request: %s", url)
     try:
         with httpx.Client(timeout=15.0) as client:
             resp = client.get(url)
@@ -83,6 +97,7 @@ def _get_unit_list(faction: str) -> list[str]:
                     token = href.replace(prefix, "").rstrip("/")
                     if token:
                         units.append(token)
+            cache_set("unit_list", json.dumps(units), faction)
             return units
     except Exception:
         return []
@@ -107,8 +122,13 @@ def _find_unit_slug(query: str, faction: str | None) -> tuple[str, str] | None:
 
 
 def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
-    """Obtiene estadísticas de una unidad desde Wahapedia."""
+    """Obtiene estadísticas de una unidad desde Wahapedia (con cache)."""
+    cached = cache_get("unit_stats", faction, unit_slug)
+    if cached is not None:
+        logger.info("Cache request GET: unit_stats %s %s", faction, unit_slug)
+        return cached
     url = f"{BASE_URL}/{EDITION}/factions/{faction}/{unit_slug}"
+    logger.info("Http request: %s", url)
     try:
         with httpx.Client(timeout=15.0) as client:
             resp = client.get(url)
@@ -137,7 +157,10 @@ def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
                 if name_el and val_el:
                     lines.append(f"{name_el.text.strip()}\t{val_el.text.strip()}")
 
-            return "\n".join(lines) if len(lines) > 1 else None
+            result = "\n".join(lines) if len(lines) > 1 else None
+            if result:
+                cache_set("unit_stats", result, faction, unit_slug)
+            return result
     except Exception:
         return None
 
