@@ -1,6 +1,9 @@
 """Servidor MCP Temperatura - expone get_temperature para consultar temperatura por ciudad."""
 
 import os
+from pathlib import Path
+
+import tomllib
 
 from mcp.server.fastmcp import FastMCP
 
@@ -9,6 +12,12 @@ mcp = FastMCP(
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8001")),
 )
+
+# Versión desde pyproject.toml para serverInfo
+_pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+if _pyproject.exists():
+    with open(_pyproject, "rb") as f:
+        mcp._mcp_server.version = tomllib.load(f)["tool"]["poetry"]["version"]
 
 # Valores simulados según SPEC_TEMPERATURA.md
 _TEMPERATURAS: dict[str, str] = {
