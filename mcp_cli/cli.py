@@ -14,14 +14,14 @@ load_dotenv()
 SERVERS: dict[str, tuple[str, str]] = {
     "temperatura": ("temperatura.server", "mcp"),
     "wahapedia": ("wahapedia.server", "mcp"),
-    "tinaja": ("tinaja.server", "mcp"),
+    "monitor": ("monitor.server", "mcp"),
 }
 
 # Puerto HTTP por servidor
 SERVER_PORTS: dict[str, int] = {
     "temperatura": 8001,
     "wahapedia": 8002,
-    "tinaja": 8003,
+    "monitor": 8003,
 }
 
 # Default HTTP

@@ -1,14 +1,31 @@
-"""Servidor MCP Tinaja - lectura en tiempo real desde MQTT o cálculo manual."""
+"""Servidor MCP Monitor - lectura en tiempo real desde MQTT y historial MongoDB."""
 
 import json
 import os
 import threading
 import time
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+# Fallback: cargar desde amanda-IA si MONGODB_URI no está en aia-mcp/.env
+if not os.environ.get("MONGODB_URI"):
+    _env_amanda = Path(__file__).resolve().parent.parent.parent / "amanda-IA" / ".env"
+    if _env_amanda.exists():
+        load_dotenv(_env_amanda)
 
 import tomllib
 from mcp.server.fastmcp import FastMCP
+
+# MongoDB para historial (estanque-historial)
+try:
+    from pymongo import MongoClient
+    _HAS_PYMONGO = True
+except ImportError:
+    _HAS_PYMONGO = False
 
 # MQTT (mismo formato que monitor_estanque.py)
 try:
@@ -24,7 +41,7 @@ except ImportError:
     _HAS_URLLIB = False
 
 mcp = FastMCP(
-    "tinaja",
+    "monitor",
     host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("FASTMCP_PORT", "8003")),
 )
@@ -51,6 +68,7 @@ MQTT_TOPIC_OUT = os.environ.get("MQTT_TOPIC_OUT", "yai-mqtt/01C40A24/out")
 # Última lectura desde MQTT (buffer de 10 como monitor)
 _lecturas_buffer: deque = deque(maxlen=10)
 _ultima_lectura: dict | None = None
+_reading_version: int = 0  # se incrementa por cada nueva lectura MQTT
 _mqtt_connected = False
 _mqtt_thread: threading.Thread | None = None
 
@@ -89,7 +107,7 @@ def _on_mqtt_disconnect(client, userdata, flags, reason_code, properties):
 
 def _on_mqtt_message(client, userdata, msg):
     """Procesa mensaje MQTT. Mismo formato que monitor_estanque on_mqtt_message."""
-    global _ultima_lectura, _lecturas_buffer
+    global _ultima_lectura, _lecturas_buffer, _reading_version
     try:
         payload = msg.payload.decode("utf-8").strip()
         payload_json = None
@@ -129,6 +147,7 @@ def _on_mqtt_message(client, userdata, msg):
                 datos["porcentaje"] = fill_level
                 datos["litros"] = round((fill_level / 100.0) * CAPACIDAD_LITROS, 2)
             _ultima_lectura = datos
+            _reading_version += 1
     except Exception:
         pass
 
@@ -236,6 +255,146 @@ def get_lectura_actual() -> str:
         f"{datos['litros']:.0f}L ({datos['porcentaje']:.1f}%) - {datos['estado']} | "
         f"(ejemplo con distancia=50 cm; sin datos MQTT)"
     )
+
+
+def _get_estanque_historial(db_name: str = "tomi-db", limit: int = 200) -> list[dict]:
+    """Obtiene registros de estanque-historial desde MongoDB."""
+    uri = os.environ.get("MONGODB_URI", "").strip()
+    if not uri or not _HAS_PYMONGO:
+        return []
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client.admin.command("ping")
+        db = client[db_name]
+        coll = db["estanque-historial"]
+        cursor = coll.find().sort("timestamp", -1).limit(limit)
+        docs = list(cursor)
+        client.close()
+        return docs
+    except Exception:
+        return []
+
+
+@mcp.tool()
+def get_velocidad_disminucion_agua(
+    db_name: str = "tomi-db",
+    horas_atras: int = 24,
+) -> str:
+    """
+    Calcula la velocidad de disminución del agua (L/h) usando el historial en MongoDB.
+
+    Consulta la colección estanque-historial en tomi-db para obtener registros
+    y calcular cuántos litros por hora está bajando (o subiendo) el nivel.
+
+    Args:
+        db_name: Base de datos MongoDB (default: tomi-db).
+        horas_atras: Ventana de tiempo en horas para el cálculo (default: 24).
+
+    Returns:
+        Velocidad en L/h (positivo = agua bajando, negativo = subiendo) y resumen.
+    """
+    if not _HAS_PYMONGO:
+        return "pymongo no instalado. Ejecute: poetry add pymongo"
+
+    uri = os.environ.get("MONGODB_URI", "").strip()
+    if not uri:
+        return (
+            "MONGODB_URI no configurado. Agregue MONGODB_URI en .env (aia-mcp o amanda-IA) "
+            "para consultar estanque-historial."
+        )
+
+    docs = _get_estanque_historial(db_name=db_name, limit=500)
+    if not docs:
+        return "No hay registros en estanque-historial. Verifique la conexión a MongoDB y que tomi-metric-collector esté guardando datos."
+
+    # Ordenar por timestamp ascendente (más antiguo primero)
+    docs_asc = sorted(docs, key=lambda d: d.get("timestamp") or d.get("hora_local", ""))
+
+    # Filtrar por ventana de tiempo
+    now = datetime.now(timezone.utc)
+    cutoff = now.timestamp() - (horas_atras * 3600)
+    ventana = [d for d in docs_asc if _ts_to_float(d) >= cutoff]
+
+    if len(ventana) < 2:
+        return (
+            f"Solo hay {len(ventana)} registro(s) en las últimas {horas_atras}h. "
+            "Se necesitan al menos 2 para calcular velocidad."
+        )
+
+    primero = ventana[0]
+    ultimo = ventana[-1]
+    litros_ini = float(primero.get("litros") or 0)
+    litros_fin = float(ultimo.get("litros") or 0)
+    ts_ini = _ts_to_float(primero)
+    ts_fin = _ts_to_float(ultimo)
+    delta_horas = (ts_fin - ts_ini) / 3600 if ts_fin > ts_ini else 0
+
+    if delta_horas < 0.01:
+        return "Intervalo de tiempo demasiado corto para calcular velocidad."
+
+    delta_litros = litros_ini - litros_fin  # positivo = agua bajó
+    velocidad = delta_litros / delta_horas
+
+    direccion = "bajando" if velocidad > 0 else "subiendo"
+    return (
+        f"Velocidad: {abs(velocidad):.1f} L/h ({direccion}) | "
+        f"Ventana: {horas_atras}h | "
+        f"Litros: {litros_ini:.0f} → {litros_fin:.0f} | "
+        f"Registros: {len(ventana)}"
+    )
+
+
+def _ts_to_float(d: dict) -> float:
+    """Convierte timestamp o hora_local a segundos desde epoch."""
+    ts = d.get("timestamp")
+    if ts is None:
+        try:
+            s = d.get("hora_local", "")
+            return datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc).timestamp()
+        except Exception:
+            return 0
+    if hasattr(ts, "timestamp"):
+        return ts.timestamp()
+    return float(ts) if ts else 0
+
+
+@mcp.tool()
+def start_live_monitor() -> str:
+    """
+    Inicia el monitor en vivo del estanque/acumulador en la interfaz.
+    Muestra las lecturas de agua (litros, porcentaje, distancia) en tiempo real
+    a medida que llegan por MQTT. Úsalo cuando el usuario pida monitorear,
+    ver en tiempo real, activar el live, o similar.
+    """
+    return "Monitor en vivo iniciado. Las lecturas aparecerán en pantalla automáticamente."
+
+
+@mcp.tool()
+def stop_live_monitor() -> str:
+    """
+    Detiene el monitor en vivo del estanque/acumulador.
+    Úsalo cuando el usuario pida detener, parar o desactivar el monitor en vivo.
+    """
+    return "Monitor en vivo detenido."
+
+
+@mcp.custom_route("/live", methods=["GET"])
+async def live_stream(request):
+    """SSE endpoint: emite la última lectura MQTT cada vez que cambia."""
+    import asyncio as _asyncio
+    from sse_starlette.sse import EventSourceResponse
+
+    async def _generator():
+        last_version = -1
+        while True:
+            if _reading_version != last_version and _ultima_lectura is not None:
+                last_version = _reading_version
+                yield {"data": json.dumps(_ultima_lectura)}
+            else:
+                yield {"comment": "keepalive"}
+            await _asyncio.sleep(1.0)
+
+    return EventSourceResponse(_generator())
 
 
 if __name__ == "__main__":

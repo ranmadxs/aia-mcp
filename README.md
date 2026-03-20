@@ -14,7 +14,7 @@ aia-mcp/
 ├── temperatura/       # get_temperature (ciudades)
 │   ├── __init__.py
 │   └── server.py
-└── tinaja/            # acumulador/estanque - litros, porcentaje
+└── monitor/           # medición, historial_mediciones
     ├── __init__.py
     └── server.py
 ```
@@ -40,12 +40,12 @@ Desde el directorio `aia-mcp/`:
 ```bash
 poetry run mcp                    # temperatura (por defecto, stdio)
 poetry run mcp temperatura        # explícito
-poetry run mcp tinaja             # acumulador/estanque (litros, %)
+poetry run mcp monitor            # acumulador/estanque (litros, %, velocidad)
 poetry run mcp --list             # listar servidores disponibles
 
 # Modo HTTP (para conexión remota)
 poetry run mcp temperatura --http   # puerto 8001
-poetry run mcp tinaja --http       # puerto 8003
+poetry run mcp monitor --http     # puerto 8003
 
 # Levantar todos los servidores
 poetry run mcp all --http
@@ -93,13 +93,14 @@ Obtiene la temperatura actual de una ciudad (valores simulados).
 
 Ciudades soportadas: Santiago, Buenos Aires, Lima, Bogotá, Madrid, New York, Londres, Tokio.
 
-### Tinaja (acumulador / estanque)
+### Monitor (acumulador / estanque)
 
 - **get_lectura_actual()**: Obtiene litros y porcentaje del acumulador en tiempo real. Usa MQTT (`MQTT_HOST`, `MQTT_TOPIC_OUT`) o `TINAJA_ESTADO_URL` como fallback. Si no hay datos, devuelve un cálculo de ejemplo.
 - **calculate_tinaja_level(distance)**: Calcula litros y porcentaje desde la distancia del sensor (cm).
 - **get_tinaja_config()**: Configuración del estanque y estado MQTT.
+- **get_velocidad_disminucion_agua(db_name, horas_atras)**: Calcula la velocidad de disminución del agua (L/h) usando el historial en MongoDB (`tomi-db.estanque-historial`). Requiere `MONGODB_URI` en `.env`.
 
-Variables en `.env`: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_OUT`. Fallback HTTP: `TINAJA_ESTADO_URL`.
+Variables en `.env`: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_OUT`. Fallback HTTP: `TINAJA_ESTADO_URL`. Para velocidad: `MONGODB_URI`.
 
 ### Wahapedia (Warhammer 40K)
 

@@ -6,7 +6,7 @@ readme = "README.md"
 packages = [
     {include = "temperatura"},
     {include = "wahapedia"},
-    {include = "tinaja"},
+    {include = "monitor"},
     {include = "mcp_cli"},
 ]
 
@@ -20,6 +20,7 @@ httpx = ">=0.27"
 beautifulsoup4 = ">=4.12"
 paho-mqtt = ">=2.0"
 python-dotenv = "^1.0"
+pymongo = ">=4.0"
 
 [build-system]
 requires = ["poetry-core"]

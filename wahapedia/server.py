@@ -121,6 +121,57 @@ def _find_unit_slug(query: str, faction: str | None) -> tuple[str, str] | None:
     return None
 
 
+def _resolve_faction_slug(faction: str) -> str | None:
+    """Resuelve nombre de facción a slug (ej: 'adeptus custodes' -> 'adeptus-custodes')."""
+    q = faction.strip().lower().replace(" ", "-")
+    if q in FACTIONS:
+        return q
+    qnorm = _normalize_query(q.replace("-", ""))
+    for fac in FACTIONS:
+        if qnorm == _normalize_query(fac.replace("-", "")):
+            return fac
+    return None
+
+
+def _fetch_stratagems(faction: str) -> str | None:
+    """Obtiene estratagemas de una facción desde Wahapedia (con cache)."""
+    fac = _resolve_faction_slug(faction)
+    if not fac or fac not in FACTIONS:
+        return None
+    cached = cache_get("stratagems", fac)
+    if cached is not None:
+        logger.info("Cache request GET: stratagems %s", fac)
+        return cached
+    url = f"{BASE_URL}/{EDITION}/factions/{fac}/"
+    logger.info("Http request: %s", url)
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                return None
+            soup = BeautifulSoup(resp.content, "html.parser")
+            stratagems = []
+            for block in soup.find_all("div", class_="str10Wrap"):
+                name_el = block.find("div", class_="str10Name")
+                cp_el = block.find("div", class_="str10CP")
+                type_el = block.find("div", class_="str10Type")
+                text_el = block.find("div", class_="str10Text")
+                if not (name_el and cp_el and type_el and text_el):
+                    continue
+                name = name_el.get_text(strip=True)
+                cost = cp_el.get_text(strip=True)
+                stype = type_el.get_text(strip=True)
+                desc = text_el.get_text(separator=" ", strip=True)
+                stratagems.append(f"{name} ({cost}) – {stype}\n{desc}")
+            if not stratagems:
+                return None
+            result = f"{url}#Stratagems\n\n" + "\n\n".join(stratagems)
+            cache_set("stratagems", result, fac)
+            return result
+    except Exception:
+        return None
+
+
 def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
     """Obtiene estadísticas de una unidad desde Wahapedia (con cache)."""
     cached = cache_get("unit_stats", faction, unit_slug)
@@ -185,6 +236,25 @@ def get_unit_stats(query: str, faction: str = "") -> str:
     result = _fetch_unit_stats(fac, unit_slug)
     if not result:
         return f"Error al obtener datos de {unit_slug} en Wahapedia."
+    return result
+
+
+@mcp.tool()
+def get_stratagems(faction: str) -> str:
+    """
+    Obtiene las estratagemas de una facción de Warhammer 40K desde Wahapedia.
+
+    Args:
+        faction: Nombre de la facción en inglés (ej: "adeptus-custodes", "space-marines",
+                 "adepta-sororitas"). Puede usar guiones o espacios.
+
+    Returns:
+        Lista de estratagemas con nombre, coste en CP, tipo y descripción. Incluye URL.
+    """
+    result = _fetch_stratagems(faction)
+    if not result:
+        valid = ", ".join(FACTIONS[:8]) + ", ..."
+        return f"No se encontraron estratagemas para '{faction}'. Facciones válidas: {valid}"
     return result
 
 
