@@ -5,6 +5,15 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v0.4.1-aia] --- 2026-03-22
+
+### Agregado
+-  get_consumo_periodo: consumo real de agua por dia/mes/rango
+-  get_top_consumo: ranking de N dias con mayor consumo y hora pico
+-  helper _compute_consumo_docs para calculos de consumo compartidos
+
+---
+
 ## [v0.4.0-aia] — 2026-03-22
 
 ### Agregado
