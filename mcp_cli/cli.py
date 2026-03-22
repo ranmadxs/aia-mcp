@@ -15,6 +15,7 @@ SERVERS: dict[str, tuple[str, str]] = {
     "temperatura": ("temperatura.server", "mcp"),
     "wahapedia": ("wahapedia.server", "mcp"),
     "monitor": ("monitor.server", "mcp"),
+    "shell": ("shell.server", "mcp"),
 }
 
 # Puerto HTTP por servidor
@@ -22,6 +23,7 @@ SERVER_PORTS: dict[str, int] = {
     "temperatura": 8001,
     "wahapedia": 8002,
     "monitor": 8003,
+    "shell": 8005,
 }
 
 # Default HTTP

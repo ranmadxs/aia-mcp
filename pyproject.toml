@@ -1,12 +1,13 @@
 [tool.poetry]
 name = "aia-mcp"
-version = "0.2.0-alpha.1"
+version = "0.3.0"
 description = "Servidor MCP para el agente aia (amanda-IA)"
 readme = "README.md"
 packages = [
     {include = "temperatura"},
     {include = "wahapedia"},
     {include = "monitor"},
+    {include = "shell"},
     {include = "mcp_cli"},
 ]
 
