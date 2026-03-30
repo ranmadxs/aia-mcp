@@ -217,6 +217,50 @@ def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
 
 
 @mcp.tool()
+def get_factions() -> str:
+    """
+    Lista todas las facciones de Warhammer 40K disponibles en Wahapedia.
+
+    Returns:
+        Lista de facciones con su nombre legible y slug para usar en otras tools.
+    """
+    lines = ["## Facciones Warhammer 40K (10ª edición)\n"]
+    for slug in FACTIONS:
+        name = slug.replace("-", " ").title()
+        lines.append(f"- **{name}** → `{slug}`")
+    lines.append(f"\nTotal: {len(FACTIONS)} facciones")
+    lines.append("\nUsa el slug en `get_units`, `get_stratagems` o `get_unit_stats`.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_units(faction: str) -> str:
+    """
+    Lista todas las unidades de una facción de Warhammer 40K desde Wahapedia.
+
+    Args:
+        faction: Nombre o slug de la facción (ej: "space-marines", "adeptus custodes", "necrons").
+
+    Returns:
+        Lista de unidades de la facción con sus slugs.
+    """
+    fac = _resolve_faction_slug(faction)
+    if not fac:
+        valid = ", ".join(FACTIONS[:6]) + ", ..."
+        return f"Facción '{faction}' no encontrada. Usa get_factions() para ver la lista. Ejemplos: {valid}"
+    units = _get_unit_list(fac)
+    if not units:
+        return f"No se pudieron obtener unidades para '{fac}'. Puede ser un problema de conexión con Wahapedia."
+    name = fac.replace("-", " ").title()
+    lines = [f"## Unidades de {name} ({len(units)} unidades)\n"]
+    for u in units:
+        display = u.replace("-", " ").title()
+        lines.append(f"- {display}")
+    lines.append(f"\nUsa `get_unit_stats(query=..., faction=\"{fac}\")` para ver estadísticas.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
 def get_unit_stats(query: str, faction: str = "") -> str:
     """
     Busca estadísticas de una unidad de Warhammer 40K en Wahapedia.
