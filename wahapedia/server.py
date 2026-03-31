@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 
 import httpx
@@ -104,19 +105,44 @@ def _get_unit_list(faction: str) -> list[str]:
 
 
 def _find_unit_slug(query: str, faction: str | None) -> tuple[str, str] | None:
-    """Busca unidad por nombre. Retorna (faction, unit_slug) o None."""
+    """Busca unidad por nombre. Retorna (faction, unit_slug) o None.
+
+    Orden de prioridad:
+    1. Coincidencia exacta
+    2. query contenido en unit_norm o viceversa
+    3. Prefijo largo (>= mitad del query)
+    4. Prefijo corto (3 chars) — último recurso
+    """
     qnorm = _normalize_query(query)
     factions_to_search = [faction] if faction else FACTIONS
 
+    # Pasada 1: exacta o contenida
     for fac in factions_to_search:
         units = _get_unit_list(fac)
         for unit_slug in units:
             unit_norm = _normalize_query(unit_slug.replace("-", " "))
-            if qnorm in unit_norm or unit_norm in qnorm:
+            if qnorm == unit_norm or qnorm in unit_norm or unit_norm in qnorm:
                 return (fac, unit_slug)
-            # Coincidencia parcial
-            if len(qnorm) >= 3 and qnorm[:3] in unit_norm:
-                return (fac, unit_slug)
+
+    # Pasada 2: prefijo largo (>= mitad del query, mínimo 4 chars)
+    min_len = max(4, len(qnorm) // 2)
+    if len(qnorm) >= min_len:
+        prefix = qnorm[:min_len]
+        for fac in factions_to_search:
+            units = _get_unit_list(fac)
+            for unit_slug in units:
+                unit_norm = _normalize_query(unit_slug.replace("-", " "))
+                if unit_norm.startswith(prefix):
+                    return (fac, unit_slug)
+
+    # Pasada 3: prefijo corto (3 chars) — solo si query es muy corto
+    if len(qnorm) <= 5:
+        for fac in factions_to_search:
+            units = _get_unit_list(fac)
+            for unit_slug in units:
+                unit_norm = _normalize_query(unit_slug.replace("-", " "))
+                if len(qnorm) >= 3 and qnorm[:3] in unit_norm:
+                    return (fac, unit_slug)
 
     return None
 
@@ -253,11 +279,70 @@ def _get_or_download_image(faction: str, unit_slug: str) -> str | None:
     return None
 
 
-def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
-    """Obtiene estadísticas + imagen de una unidad desde Wahapedia (con cache).
+def _parse_weapons_table(soup: BeautifulSoup) -> list[str]:
+    """Parsea la tabla de armas del datasheet. Retorna líneas formateadas."""
+    lines = []
+    for tbl in soup.find_all("table"):
+        rows = tbl.find_all("tr")
+        if not rows:
+            continue
+        first_cells = [td.get_text(strip=True) for td in rows[0].find_all(["td", "th"])]
+        # Identificar tablas de armas por su cabecera
+        if not any(h in first_cells for h in ("RANGED WEAPONS", "MELEE WEAPONS")):
+            continue
+        header = [c for c in first_cells if c]  # ['RANGED WEAPONS'/'MELEE WEAPONS', 'RANGE', 'A', 'BS'/'WS', 'S', 'AP', 'D']
+        section = header[0] if header else "WEAPONS"
+        lines.append(f"\n{section}: Range | A | BS/WS | S | AP | D")
+        SECTION_HEADERS = {"RANGED WEAPONS", "MELEE WEAPONS"}
+        seen = set()
+        for row in rows[1:]:
+            cells = [td.get_text(separator=" ", strip=True) for td in row.find_all(["td", "th"])]
+            # Remove leading empty cell
+            cells = [c for c in cells if c]
+            if not cells:
+                continue
+            # New section header mid-table (e.g. MELEE WEAPONS after RANGED)
+            if cells[0] in SECTION_HEADERS:
+                lines.append(f"\n{cells[0]}: Range | A | BS/WS | S | AP | D")
+                seen.clear()
+                continue
+            if len(cells) == 1:
+                # Weapon group label (repeated before stats row) — skip
+                continue
+            if len(cells) >= 7:
+                # Full weapon row: name, range, A, BS/WS, S, AP, D
+                name = cells[0]
+                if name in seen:
+                    continue
+                seen.add(name)
+                stats = " | ".join(cells[1:7])
+                special = cells[7] if len(cells) > 7 else ""
+                suffix = f"  [{special}]" if special else ""
+                lines.append(f"  {name}: {stats}{suffix}")
+        # If section header "MELEE WEAPONS" appears mid-table, mark it
+        # (already handled by separate table iteration)
+    return lines
 
-    El resultado del cache de stats NO incluye IMAGE_PATH>> porque la imagen
-    se gestiona por separado en disco. get_unit_stats() añade IMAGE_PATH>> después.
+
+def _parse_abilities(soup: BeautifulSoup) -> list[str]:
+    """Parsea las habilidades principales del datasheet."""
+    lines = []
+    seen = set()
+    for ab in soup.find_all("div", class_="dsAbility"):
+        text = ab.get_text(separator=" ", strip=True)
+        # Skip overly long ability texts (detailed rules) — keep the label short
+        short = text[:120]
+        if short and short not in seen:
+            seen.add(short)
+            lines.append(f"  {short}")
+    return lines
+
+
+def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
+    """Obtiene estadísticas completas de una unidad desde Wahapedia (con cache).
+
+    Incluye: perfil base (M/T/Sv/W/Ld/OC), armas (ranged+melee con Range/A/BS-WS/S/AP/D)
+    y habilidades. El resultado del cache NO incluye IMAGE_PATH>>.
     """
     cached = cache_get("unit_stats", faction, unit_slug)
     if cached is not None:
@@ -275,39 +360,57 @@ def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
             # Nombre de la unidad
             unit_div = soup.select_one("div.dsH2Header div:first-child")
             unit_name = unit_div.text.strip() if unit_div else unit_slug
+            # Strip base size notation e.g. "Carnifexes(⌀105 x 70mm)"
+            unit_name = re.sub(r"\(.*?\)$", "", unit_name).strip()
 
-            # Características base (M, T, Sv, W, Ld, OC)
+            lines = [f"{unit_name}", f"Facción: {faction.replace('-',' ').title()}", f"Fuente: {url}", ""]
+
+            # ── Perfil base (M, T, Sv, W, Ld, OC) ──────────────────────
+            lines.append("PERFIL BASE:")
             chars = soup.select("div.dsCharWrap")
-            lines = [f"{unit_name}\n{url}\n"]
             for ch in chars:
                 name_el = ch.find("div", {"class": "dsCharName"})
-                val_el = ch.find("div", {"class": "dsCharValue"})
+                val_el  = ch.find("div", {"class": "dsCharValue"})
                 if name_el and val_el:
-                    lines.append(f"{name_el.text.strip()}\t{val_el.text.strip()}")
+                    lines.append(f"  {name_el.text.strip()}: {val_el.text.strip()}")
 
             # Invulnerable save
             invul = soup.select_one("div.dsInvulWrap")
             if invul:
                 name_el = invul.find("div", recursive=False)
-                val_el = invul.select_one("div.dsCharInvulValue")
+                val_el  = invul.select_one("div.dsCharInvulValue")
                 if name_el and val_el:
-                    lines.append(f"{name_el.text.strip()}\t{val_el.text.strip()}")
+                    lines.append(f"  {name_el.text.strip()}: {val_el.text.strip()}")
 
-            result = "\n".join(lines) if len(lines) > 1 else None
+            # ── Armas ────────────────────────────────────────────────────
+            weapon_lines = _parse_weapons_table(soup)
+            if weapon_lines:
+                lines.extend(weapon_lines)
+
+            # ── Habilidades ──────────────────────────────────────────────
+            ability_lines = _parse_abilities(soup)
+            if ability_lines:
+                lines.append("\nHABILIDADES:")
+                lines.extend(ability_lines)
+
+            result = "\n".join(lines) if len(lines) > 3 else None
             if result:
                 cache_set("unit_stats", result, faction, unit_slug)
 
-            # Descargar imagen si no está en cache (buscar via DDG)
+            # Descargar imagen en background si no está en cache
             img_cached = _get_or_download_image(faction, unit_slug)
             if not img_cached:
-                img_url = _search_image_bing(unit_name)
-                if img_url:
-                    _download_image(img_url, unit_slug)
-                else:
-                    logger.warning("No image found via DDG for %s/%s", faction, unit_slug)
+                def _bg_fetch(name=unit_name, slug=unit_slug):
+                    img_url = _search_image_bing(f"{name} Warhammer 40k Tyranids miniature")
+                    if img_url:
+                        _download_image(img_url, slug)
+                    else:
+                        logger.warning("No image found via Bing for %s", slug)
+                threading.Thread(target=_bg_fetch, daemon=True).start()
 
             return result
-    except Exception:
+    except Exception as e:
+        logger.exception("Error fetching unit stats for %s/%s: %s", faction, unit_slug, e)
         return None
 
 
@@ -380,11 +483,14 @@ def get_unit_stats(query: str, faction: str = "") -> str:
         return f"Error al obtener datos de {unit_slug} en Wahapedia."
     img_path = _get_or_download_image(fac, unit_slug)
     if not img_path:
+        # No en cache: descarga en background, la imagen estará disponible en la próxima consulta
         unit_name = unit_slug.replace("-", " ").title()
-        img_url = _search_image_bing(unit_name)
-        if img_url:
-            img_path = _download_image(img_url, unit_slug)
-    if img_path:
+        def _bg_fetch(name=unit_name, slug=unit_slug):
+            img_url = _search_image_bing(name)
+            if img_url:
+                _download_image(img_url, slug)
+        threading.Thread(target=_bg_fetch, daemon=True).start()
+    else:
         result += f"\n\nIMAGE_PATH>> {img_path}"
     return result
 
@@ -429,6 +535,7 @@ def get_unit_image(query: str, faction: str = "") -> str:
     # Intentar desde cache disco primero
     img_path = _get_or_download_image(fac, unit_slug)
     if not img_path:
+        # Descargar sincrónicamente ya que esta tool fue llamada explícitamente para la imagen
         unit_name = unit_slug.replace("-", " ").title()
         img_url = _search_image_bing(unit_name)
         if img_url:
@@ -472,6 +579,167 @@ def search_wahapedia(query: str) -> str:
             q = q[len(prefix) :].strip()
             break
     return get_unit_stats(q, "")
+
+
+def _fetch_unit_stratagems_raw(faction: str, unit_slug: str) -> list[dict] | None:
+    """Obtiene lista de estratagemas de la página de unidad (con cache).
+    Retorna lista de dicts {name, cp, type, text} o None."""
+    cache_key_prefix = "unit_stratagems"
+    cached = cache_get(cache_key_prefix, faction, unit_slug)
+    if cached is not None:
+        logger.info("Cache request GET: unit_stratagems %s %s", faction, unit_slug)
+        try:
+            return json.loads(cached)
+        except Exception:
+            pass
+    url = f"{BASE_URL}/{EDITION}/factions/{faction}/{unit_slug}"
+    logger.info("Http request stratagems: %s", url)
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(url)
+            if resp.status_code != 200:
+                return None
+            soup = BeautifulSoup(resp.content, "html.parser")
+            strats = []
+            for block in soup.find_all("div", class_="str10Wrap"):
+                name_el = block.find("div", class_="str10Name")
+                cp_el   = block.find("div", class_="str10CP")
+                type_el = block.find("div", class_="str10Type")
+                text_el = block.find("div", class_="str10Text")
+                if not name_el:
+                    continue
+                strats.append({
+                    "name": name_el.get_text(strip=True),
+                    "cp":   cp_el.get_text(strip=True) if cp_el else "?",
+                    "type": type_el.get_text(strip=True) if type_el else "",
+                    "text": text_el.get_text(separator=" ", strip=True) if text_el else "",
+                })
+            if strats:
+                cache_set(cache_key_prefix, json.dumps(strats, ensure_ascii=False), faction, unit_slug)
+            return strats or None
+    except Exception as e:
+        logger.warning("Error fetching unit stratagems %s/%s: %s", faction, unit_slug, e)
+        return None
+
+
+@mcp.tool()
+def get_unit_stratagems(query: str, faction: str = "") -> str:
+    """
+    Lista las estratagemas disponibles para una unidad de Warhammer 40K.
+    Muestra título, coste en CP y tipo de cada estratagema.
+    Para ver el detalle completo de una, usa get_stratagem_detail().
+
+    Args:
+        query:   Nombre de la unidad (ej: "Carnifex", "Hormagaunts").
+        faction: Facción opcional (ej: "tyranids"). Si está vacío, busca en todas.
+
+    Returns:
+        Lista de estratagemas aplicables con nombre, CP y tipo.
+    """
+    fac = _resolve_faction_slug(faction) if faction.strip() else None
+    found = _find_unit_slug(query, fac)
+    if not found and fac:
+        found = _find_unit_slug(query, None)
+    if not found:
+        return f"No se encontró la unidad '{query}'."
+    fac, unit_slug = found
+    strats = _fetch_unit_stratagems_raw(fac, unit_slug)
+    if not strats:
+        return f"No se encontraron estratagemas para '{unit_slug}' ({fac})."
+    unit_display = unit_slug.replace("-", " ").title()
+    lines = [f"## Estratagemas de {unit_display} ({fac.replace('-',' ').title()})\n"]
+    for s in strats:
+        lines.append(f"- **{s['name']}** [{s['cp']}]  —  {s['type']}")
+    lines.append(f"\nTotal: {len(strats)} estratagemas.")
+    lines.append(f"\nUsa `get_stratagem_detail(name=\"...\", faction=\"{fac}\")` para ver el texto completo de una.")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def get_stratagem_detail(name: str, faction: str = "") -> str:
+    """
+    Devuelve el texto completo de una estratagema de Warhammer 40K.
+
+    Args:
+        name:    Nombre exacto o aproximado de la estratagema
+                 (ej: "RAPID REGENERATION", "ADRENAL SURGE").
+        faction: Facción (ej: "tyranids", "space-marines"). Recomendado para mayor velocidad.
+
+    Returns:
+        Nombre, coste CP, tipo y reglas completas de la estratagema.
+    """
+    # Buscar la facción
+    fac = _resolve_faction_slug(faction) if faction.strip() else None
+    facs_to_search = [fac] if fac else FACTIONS
+
+    qnorm = _normalize_query(name)
+
+    for f in facs_to_search:
+        cached_strats = None
+        # Intentar encontrar en cache de cualquier unidad de esa facción
+        # Más rápido: usar la página de facción directamente (stratagems ya parseada)
+        cached_fac = cache_get("stratagems", f)
+        if cached_fac is None:
+            # Hacer fetch de la página de facción para obtener todas las estratagemas
+            url = f"{BASE_URL}/{EDITION}/factions/{f}/"
+            try:
+                with httpx.Client(timeout=15.0) as client:
+                    resp = client.get(url)
+                    if resp.status_code != 200:
+                        continue
+                    soup = BeautifulSoup(resp.content, "html.parser")
+                    all_strats = []
+                    for block in soup.find_all("div", class_="str10Wrap"):
+                        n_el  = block.find("div", class_="str10Name")
+                        cp_el = block.find("div", class_="str10CP")
+                        t_el  = block.find("div", class_="str10Type")
+                        tx_el = block.find("div", class_="str10Text")
+                        if n_el:
+                            all_strats.append({
+                                "name": n_el.get_text(strip=True),
+                                "cp":   cp_el.get_text(strip=True) if cp_el else "?",
+                                "type": t_el.get_text(strip=True) if t_el else "",
+                                "text": tx_el.get_text(separator=" ", strip=True) if tx_el else "",
+                            })
+                    if all_strats:
+                        cache_set("stratagems_detail", json.dumps(all_strats, ensure_ascii=False), f)
+                        cached_strats = all_strats
+            except Exception:
+                continue
+        else:
+            # Try the detail cache
+            raw = cache_get("stratagems_detail", f)
+            if raw:
+                try:
+                    cached_strats = json.loads(raw)
+                except Exception:
+                    pass
+
+        if not cached_strats:
+            continue
+
+        # Buscar por nombre normalizado (exacto primero, luego contenido)
+        match = None
+        for s in cached_strats:
+            snorm = _normalize_query(s["name"])
+            if snorm == qnorm:
+                match = s; break
+        if not match:
+            for s in cached_strats:
+                snorm = _normalize_query(s["name"])
+                if qnorm in snorm or snorm in qnorm:
+                    match = s; break
+
+        if match:
+            lines = [
+                f"## {match['name']}",
+                f"**Coste:** {match['cp']}  |  **Tipo:** {match['type']}",
+                "",
+                match["text"],
+            ]
+            return "\n".join(lines)
+
+    return f"No se encontró la estratagema '{name}'" + (f" en facción '{faction}'." if faction else ".")
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ SERVERS: dict[str, tuple[str, str]] = {
     "airbnb": ("airbnb.server", "mcp"),
     "charts": ("charts.server", "mcp"),
     "email": ("mcp_email.server", "mcp"),
+    "mangadex": ("mangadex.server", "mcp"),
 }
 
 # Puerto HTTP por servidor
@@ -30,6 +31,7 @@ SERVER_PORTS: dict[str, int] = {
     "airbnb": 8006,
     "charts": 8007,
     "email": 8008,
+    "mangadex": 8009,
 }
 
 # Default HTTP

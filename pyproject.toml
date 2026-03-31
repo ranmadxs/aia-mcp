@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aia-mcp"
-version = "0.6.3"
+version = "0.6.4"
 description = "Servidor MCP para el agente aia (amanda-IA)"
 readme = "README.md"
 packages = [
@@ -12,6 +12,7 @@ packages = [
     {include = "airbnb"},
     {include = "charts"},
     {include = "mcp_email"},
+    {include = "mangadex"},
 ]
 
 [tool.poetry.scripts]
