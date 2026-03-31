@@ -172,8 +172,93 @@ def _fetch_stratagems(faction: str) -> str | None:
         return None
 
 
+def _find_aia_root() -> Path | None:
+    """Encuentra el directorio raíz del proyecto amanda-IA (donde está .aia/)."""
+    from wahapedia.cache import _find_mcp_config
+    cfg = _find_mcp_config()
+    if cfg:
+        return cfg.parent.parent  # .aia/mcp.json → proyecto
+    return Path.cwd()
+
+
+def _image_cache_path(slug: str) -> Path:
+    """Ruta permanente de imagen: .aia/images/<slug>.jpg"""
+    root = _find_aia_root() or Path.cwd()
+    img_dir = root / ".aia" / "images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", slug)
+    return img_dir / f"{safe}.jpg"
+
+
+def _search_image_bing(unit_name: str) -> str | None:
+    """Busca la imagen de una unidad WH40K usando Bing Image Search."""
+    _ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    query = f"{unit_name} Warhammer 40k miniature"
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            r = client.get(
+                "https://www.bing.com/images/search",
+                params={"q": query, "form": "HDRSC2", "first": "1"},
+                headers={"User-Agent": _ua, "Accept-Language": "en-US,en;q=0.9"},
+            )
+            if r.status_code != 200:
+                return None
+            # Bing embeds murl (media URL) HTML-encoded in the page
+            import html
+            matches = re.findall(r'&quot;murl&quot;:&quot;([^&]+)&quot;', r.text)
+            if not matches:
+                # Fallback: unescaped JSON
+                matches = re.findall(r'"murl":"([^"]+)"', r.text)
+            if matches:
+                url = html.unescape(matches[0])
+                logger.info("Bing image found for %s: %s", unit_name, url[:100])
+                return url
+    except Exception as e:
+        logger.warning("Bing image search failed for %s: %s", unit_name, e)
+    return None
+
+
+def _download_image(img_url: str, unit_slug: str) -> str | None:
+    """Descarga una imagen y la guarda en cache. Retorna la ruta local o None."""
+    path = _image_cache_path(unit_slug)
+    try:
+        with httpx.Client(timeout=20.0, follow_redirects=True) as client:
+            resp = client.get(img_url)
+            if resp.status_code == 200:
+                # Ajustar extensión según Content-Type
+                ct = resp.headers.get("content-type", "")
+                if "png" in ct:
+                    path = path.with_suffix(".png")
+                elif "webp" in ct:
+                    path = path.with_suffix(".webp")
+                path.write_bytes(resp.content)
+                logger.info("Image downloaded: %s → %s", img_url, path)
+                return str(path)
+    except Exception as e:
+        logger.warning("Image download failed %s: %s", img_url, e)
+    return None
+
+
+def _get_or_download_image(faction: str, unit_slug: str) -> str | None:
+    """
+    Retorna la ruta local de la imagen de la unidad.
+    Cache en disco: si ya existe el archivo, lo retorna directamente.
+    Si no, requiere que se llame desde _fetch_unit_stats_with_image para reusar el soup.
+    """
+    for ext in (".jpg", ".png", ".webp"):
+        p = _image_cache_path(unit_slug).with_suffix(ext)
+        if p.exists():
+            logger.info("Image cache HIT: %s", p)
+            return str(p)
+    return None
+
+
 def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
-    """Obtiene estadísticas de una unidad desde Wahapedia (con cache)."""
+    """Obtiene estadísticas + imagen de una unidad desde Wahapedia (con cache).
+
+    El resultado del cache de stats NO incluye IMAGE_PATH>> porque la imagen
+    se gestiona por separado en disco. get_unit_stats() añade IMAGE_PATH>> después.
+    """
     cached = cache_get("unit_stats", faction, unit_slug)
     if cached is not None:
         logger.info("Cache request GET: unit_stats %s %s", faction, unit_slug)
@@ -211,6 +296,16 @@ def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
             result = "\n".join(lines) if len(lines) > 1 else None
             if result:
                 cache_set("unit_stats", result, faction, unit_slug)
+
+            # Descargar imagen si no está en cache (buscar via DDG)
+            img_cached = _get_or_download_image(faction, unit_slug)
+            if not img_cached:
+                img_url = _search_image_bing(unit_name)
+                if img_url:
+                    _download_image(img_url, unit_slug)
+                else:
+                    logger.warning("No image found via DDG for %s/%s", faction, unit_slug)
+
             return result
     except Exception:
         return None
@@ -272,14 +367,25 @@ def get_unit_stats(query: str, faction: str = "") -> str:
     Returns:
         Estadísticas de la unidad (M, T, Sv, W, Ld, OC, etc.) y URL de Wahapedia.
     """
-    fac = faction.strip().lower().replace(" ", "-") if faction else None
+    fac = _resolve_faction_slug(faction) if faction and faction.strip() else None
     found = _find_unit_slug(query, fac)
+    # Si no se encontró con la facción dada, buscar en todas (typo del LLM)
+    if not found and fac:
+        found = _find_unit_slug(query, None)
     if not found:
         return f"No se encontró la unidad '{query}' en Wahapedia. Prueba con otro nombre o especifica la facción."
     fac, unit_slug = found
     result = _fetch_unit_stats(fac, unit_slug)
     if not result:
         return f"Error al obtener datos de {unit_slug} en Wahapedia."
+    img_path = _get_or_download_image(fac, unit_slug)
+    if not img_path:
+        unit_name = unit_slug.replace("-", " ").title()
+        img_url = _search_image_bing(unit_name)
+        if img_url:
+            img_path = _download_image(img_url, unit_slug)
+    if img_path:
+        result += f"\n\nIMAGE_PATH>> {img_path}"
     return result
 
 
@@ -300,6 +406,36 @@ def get_stratagems(faction: str) -> str:
         valid = ", ".join(FACTIONS[:8]) + ", ..."
         return f"No se encontraron estratagemas para '{faction}'. Facciones válidas: {valid}"
     return result
+
+
+@mcp.tool()
+def get_unit_image(query: str, faction: str = "") -> str:
+    """
+    Descarga y retorna la imagen de una unidad de Warhammer 40K desde Wahapedia.
+    La imagen se guarda en .aia/download/images/ (cache en disco).
+
+    Args:
+        query: Nombre de la unidad (ej: "Rhino", "Saint Celestine")
+        faction: Facción opcional (ej: "space-marines"). Si está vacío, busca en todas.
+
+    Returns:
+        Ruta local de la imagen como IMAGE_PATH>> .aia/download/images/<unidad>.jpg
+    """
+    fac = faction.strip().lower().replace(" ", "-") if faction else None
+    found = _find_unit_slug(query, fac)
+    if not found:
+        return f"No se encontró la unidad '{query}' en Wahapedia."
+    fac, unit_slug = found
+    # Intentar desde cache disco primero
+    img_path = _get_or_download_image(fac, unit_slug)
+    if not img_path:
+        unit_name = unit_slug.replace("-", " ").title()
+        img_url = _search_image_bing(unit_name)
+        if img_url:
+            img_path = _download_image(img_url, unit_slug)
+    if not img_path:
+        return f"No se encontró imagen para '{query}' en Wahapedia."
+    return f"IMAGE_PATH>> {img_path}"
 
 
 @mcp.tool()

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aia-mcp"
-version = "0.4.1"
+version = "0.6.3"
 description = "Servidor MCP para el agente aia (amanda-IA)"
 readme = "README.md"
 packages = [
@@ -9,6 +9,9 @@ packages = [
     {include = "monitor"},
     {include = "shell"},
     {include = "mcp_cli"},
+    {include = "airbnb"},
+    {include = "charts"},
+    {include = "mcp_email"},
 ]
 
 [tool.poetry.scripts]
@@ -22,6 +25,7 @@ beautifulsoup4 = ">=4.12"
 paho-mqtt = ">=2.0"
 python-dotenv = "^1.0"
 pymongo = ">=4.0"
+matplotlib = ">=3.7"
 
 [build-system]
 requires = ["poetry-core"]

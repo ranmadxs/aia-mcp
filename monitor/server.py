@@ -12,11 +12,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
-# Fallback: cargar desde amanda-IA si MONGODB_URI no está en aia-mcp/.env
-if not os.environ.get("MONGODB_URI"):
-    _env_amanda = Path(__file__).resolve().parent.parent.parent / "amanda-IA" / ".env"
-    if _env_amanda.exists():
-        load_dotenv(_env_amanda)
 
 import tomllib
 from mcp.server.fastmcp import FastMCP
@@ -63,6 +58,7 @@ MQTT_TOPIC_OUT = os.environ.get("MQTT_TOPIC_OUT", "yai-mqtt/01C40A24/out")
 
 # Última lectura desde MQTT (buffer de 10 como monitor)
 _lecturas_buffer: deque = deque(maxlen=10)
+_lecturas_completas: deque = deque(maxlen=10)  # últimas 10 lecturas completas {litros, porcentaje, ...}
 _ultima_lectura: dict | None = None
 _reading_version: int = 0  # se incrementa por cada nueva lectura MQTT
 _mqtt_connected = False
@@ -143,6 +139,7 @@ def _on_mqtt_message(client, userdata, msg):
                 datos["porcentaje"] = fill_level
                 datos["litros"] = round((fill_level / 100.0) * CAPACIDAD_LITROS, 2)
             _ultima_lectura = datos
+            _lecturas_completas.append(datos)
             _reading_version += 1
     except Exception:
         pass
@@ -218,31 +215,35 @@ def get_lectura_actual() -> str:
     Si no hay datos MQTT disponibles, cae al último registro en MongoDB.
     Los valores se muestran tal como vienen, sin cálculos adicionales.
     """
-    # 1. Última lectura MQTT en memoria
-    if _ultima_lectura:
-        d = _ultima_lectura
+    # 1. Promedio de últimas 10 lecturas MQTT en memoria
+    if _lecturas_completas:
+        n = len(_lecturas_completas)
+        litros_prom = sum(d.get("litros") or 0 for d in _lecturas_completas) / n
+        pct_prom = sum(d.get("porcentaje") or 0 for d in _lecturas_completas) / n
+        estado = _ultima_lectura.get("estado") if _ultima_lectura else None
         return json.dumps({
             "fuente": "mqtt",
-            "litros": d.get("litros"),
-            "porcentaje": d.get("porcentaje"),
-            "estado": d.get("estado"),
-            "distancia_cm": d.get("distancia"),
+            "litros": round(litros_prom, 1),
+            "porcentaje": round(pct_prom, 1),
+            "estado": estado,
+            "lecturas_promediadas": n,
         }, ensure_ascii=False)
 
-    # 2. Fallback: último registro en MongoDB
+    # 2. Fallback: promedio de últimas 10 lecturas en MongoDB
     if _HAS_PYMONGO:
-        docs = _get_estanque_historial(limit=1)
+        docs = _get_estanque_historial(limit=10)
         if docs:
-            d = docs[0]
-            ts = d.get("timestamp")
+            n = len(docs)
+            litros_prom = sum(float(d.get("litros") or 0) for d in docs) / n
+            pct_prom = sum(float(d.get("porcentaje") or 0) for d in docs) / n
+            ts = docs[0].get("timestamp")
             ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
             return json.dumps({
                 "fuente": "mongodb",
-                "timestamp": ts_str,
-                "litros": d.get("litros"),
-                "porcentaje": d.get("porcentaje"),
-                "estado": d.get("estado"),
-                "distancia_cm": d.get("distancia_cm"),
+                "timestamp_ultima": ts_str,
+                "litros": round(litros_prom, 1),
+                "porcentaje": round(pct_prom, 1),
+                "lecturas_promediadas": n,
             }, ensure_ascii=False)
 
     return "Sin datos disponibles. MQTT no conectado y sin registros en MongoDB."
@@ -269,11 +270,16 @@ def _resolver_fecha(valor: str) -> datetime | None:
     if v == "yesterday":
         return now - timedelta(days=1)
 
-    # Patrón: now-N unit(s) — con o sin espacios, ej: 'now-2days', 'now-2 days', 'now - 2 days'
-    m = re.match(r"now\s*-\s*(\d+)\s*(second|minute|hour|day|week|month)s?", v)
+    # Patrón: now-N unit — soporta nombres completos y abreviaciones
+    # Ej: 'now-1d', 'now-2h', 'now-1w', 'now-2 days', 'now-3hours', 'now - 1 month'
+    m = re.match(
+        r"now\s*-\s*(\d+)\s*"
+        r"(seconds?|minutes?|hours?|days?|weeks?|months?|s|m|h|d|w)",
+        v,
+    )
     if m:
         n = int(m.group(1))
-        unit = m.group(2)
+        unit = m.group(2).rstrip("s")  # normalizar a singular
         delta_map = {
             "second": timedelta(seconds=n),
             "minute": timedelta(minutes=n),
@@ -281,8 +287,13 @@ def _resolver_fecha(valor: str) -> datetime | None:
             "day":    timedelta(days=n),
             "week":   timedelta(weeks=n),
             "month":  timedelta(days=n * 30),
+            # abreviaciones
+            "h": timedelta(hours=n),
+            "d": timedelta(days=n),
+            "w": timedelta(weeks=n),
+            "m": timedelta(minutes=n),
         }
-        return now - delta_map[unit]
+        return now - delta_map.get(unit, timedelta(days=n))
 
     # ISO 8601
     try:
@@ -338,7 +349,7 @@ def _get_estanque_historial(
     if not uri or not _HAS_PYMONGO:
         return []
     try:
-        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        client = MongoClient(uri, serverSelectionTimeoutMS=15000)
         client.admin.command("ping")
         db = client[db_name]
         coll = db["estanque-historial"]
@@ -346,12 +357,65 @@ def _get_estanque_historial(
         if desde is not None or hasta is not None:
             ts_filter: dict = {}
             if desde is not None:
-                ts_filter["$gte"] = datetime.fromtimestamp(desde, tz=timezone.utc)
+                ts_filter["$gte"] = datetime.fromtimestamp(desde, tz=timezone.utc).replace(tzinfo=None)
             if hasta is not None:
-                ts_filter["$lte"] = datetime.fromtimestamp(hasta, tz=timezone.utc)
+                ts_filter["$lte"] = datetime.fromtimestamp(hasta, tz=timezone.utc).replace(tzinfo=None)
             query["timestamp"] = ts_filter
         cursor = coll.find(query).sort("timestamp", -1).limit(limit)
         docs = list(cursor)
+        client.close()
+        return docs
+    except Exception:
+        return []
+
+
+def _get_historial_por_dia(
+    db_name: str = "tomi-db",
+    desde: float | None = None,
+    hasta: float | None = None,
+) -> list[dict]:
+    """
+    Retorna UN promedio de litros por día usando aggregation en MongoDB.
+    Solo incluye días que tengan al menos 2 registros (descarta bordes incompletos).
+    Resultado: lista de dicts con {dia: 'YYYY-MM-DD', litros_promedio, registros}.
+    """
+    uri = os.environ.get("MONGODB_URI", "").strip()
+    if not uri or not _HAS_PYMONGO:
+        return []
+    try:
+        client = MongoClient(uri, serverSelectionTimeoutMS=15000)
+        db = client[db_name]
+        coll = db["estanque-historial"]
+
+        match: dict = {}
+        if desde is not None or hasta is not None:
+            ts_filter: dict = {}
+            if desde is not None:
+                ts_filter["$gte"] = datetime.fromtimestamp(desde, tz=timezone.utc).replace(tzinfo=None)
+            if hasta is not None:
+                ts_filter["$lte"] = datetime.fromtimestamp(hasta, tz=timezone.utc).replace(tzinfo=None)
+            match["timestamp"] = ts_filter
+
+        pipeline = [
+            {"$match": match},
+            {"$sort": {"timestamp": 1}},  # ordenar antes de $group para que $first/$last sean confiables
+            {"$group": {
+                "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}},
+                "litros_promedio": {"$avg": "$litros"},
+                "litros_inicio": {"$first": "$litros"},  # primer registro del día
+                "litros_fin": {"$last": "$litros"},       # último registro del día
+                "registros": {"$sum": 1},
+            }},
+            {"$match": {"registros": {"$gte": 2}}},  # descartar días con un solo registro (borde)
+            {"$sort": {"_id": 1}},
+        ]
+
+        docs = [
+            {"dia": d["_id"], "litros_promedio": d["litros_promedio"],
+             "litros_inicio": d["litros_inicio"], "litros_fin": d["litros_fin"],
+             "registros": d["registros"]}
+            for d in coll.aggregate(pipeline)
+        ]
         client.close()
         return docs
     except Exception:
@@ -499,6 +563,10 @@ def _ts_to_float(d: dict) -> float:
         except Exception:
             return 0
     if hasattr(ts, "timestamp"):
+        # Si es naive (sin tzinfo), MongoDB lo guarda en UTC → forzar UTC para evitar
+        # que Python lo interprete como hora local del servidor
+        if ts.tzinfo is None:
+            return ts.replace(tzinfo=timezone.utc).timestamp()
         return ts.timestamp()
     return float(ts) if ts else 0
 
@@ -599,34 +667,57 @@ def estimar_duracion_agua(db_name: str = "tomi-db") -> str:
 
 
 def _compute_consumo_docs(docs):
-    from datetime import datetime, timezone
+    """
+    Calcula consumo usando promedios horarios para eliminar ruido del sensor.
+
+    1. Agrupa lecturas por hora y promedia los litros de cada hora.
+    2. Calcula el delta neto entre promedios horarios consecutivos.
+    3. Total = suma de caídas entre horas (ignorando subidas por recarga).
+    4. Hora pico = hora con mayor caída entre su promedio y el siguiente.
+    """
     if len(docs) < 2:
         return {"total_consumido": 0.0, "promedio_lh": 0.0, "horas": 0.0,
                 "registros": len(docs), "max_consumo_hora": 0.0, "hora_pico": None}
-    total = 0.0
-    for i in range(1, len(docs)):
-        diff = float(docs[i - 1].get("litros") or 0) - float(docs[i].get("litros") or 0)
-        if diff > 0:
-            total += diff
-    ts_ini = _ts_to_float(docs[0])
-    ts_fin = _ts_to_float(docs[-1])
-    horas = (ts_fin - ts_ini) / 3600 if ts_fin > ts_ini else 0
-    promedio_lh = total / horas if horas > 0 else 0
-    hourly = {}
+
+    # Agrupar por hora y calcular promedio de litros por hora
+    hourly: dict[str, list[float]] = {}
     for doc in docs:
         ts = _ts_to_float(doc)
-        if ts:
+        litros = doc.get("litros")
+        if ts and litros is not None:
             key = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H")
-            hourly.setdefault(key, []).append(doc)
+            hourly.setdefault(key, []).append(float(litros))
+
+    if len(hourly) < 2:
+        return {"total_consumido": 0.0, "promedio_lh": 0.0, "horas": 0.0,
+                "registros": len(docs), "max_consumo_hora": 0.0, "hora_pico": None}
+
+    # Ordenar horas y calcular promedio por hora
+    horas_ord = sorted(hourly.keys())
+    promedios = {h: sum(v) / len(v) for h, v in hourly.items()}
+
+    # Delta neto entre horas adyacentes (exactamente 1h de diferencia).
+    # Se ignoran gaps (sin datos) para no inflar max_consumo_hora con caídas de varias horas.
+    total = 0.0
     max_h, hora_pico = 0.0, None
-    for key, hdocs in hourly.items():
-        if len(hdocs) < 2:
-            continue
-        hdocs_s = sorted(hdocs, key=_ts_to_float)
-        consumo_h = float(hdocs_s[0].get("litros") or 0) - float(hdocs_s[-1].get("litros") or 0)
-        if consumo_h > max_h:
-            max_h, hora_pico = consumo_h, key
-    return {"total_consumido": total, "promedio_lh": promedio_lh, "horas": horas,
+    horas_contiguas = 0
+    for i in range(1, len(horas_ord)):
+        h_prev, h_curr = horas_ord[i - 1], horas_ord[i]
+        # Verificar que sean horas realmente adyacentes (diferencia = 1h)
+        dt_prev = datetime.strptime(h_prev, "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
+        dt_curr = datetime.strptime(h_curr, "%Y-%m-%d %H").replace(tzinfo=timezone.utc)
+        if (dt_curr - dt_prev).total_seconds() != 3600:
+            continue  # gap de datos, saltar
+        horas_contiguas += 1
+        delta = promedios[h_prev] - promedios[h_curr]
+        if delta > 0:
+            total += delta
+            if delta > max_h:
+                max_h, hora_pico = delta, h_curr
+
+    promedio_lh = total / horas_contiguas if horas_contiguas > 0 else 0.0
+
+    return {"total_consumido": total, "promedio_lh": promedio_lh, "horas": horas_contiguas,
             "registros": len(docs), "max_consumo_hora": max_h, "hora_pico": hora_pico}
 
 
@@ -661,6 +752,83 @@ def get_consumo_periodo(fecha_inicio: str, fecha_fin: str = "", db_name: str = "
 
 
 @mcp.tool()
+def get_consumo_mes(mes: int = 0, año: int = 0, db_name: str = "tomi-db") -> str:
+    """
+    Calcula el consumo de agua de un mes completo.
+
+    Args:
+        mes: Número de mes (1-12). Si es 0 usa el mes anterior.
+        año: Año (ej: 2026). Si es 0 usa el año actual (o el anterior si mes=0).
+        db_name: Base de datos MongoDB (default: tomi-db).
+
+    Returns:
+        JSON con consumo total, promedio L/h, hora pico y consumo diario promedio del mes.
+    """
+    if not _HAS_PYMONGO:
+        return "pymongo no instalado. Ejecute: poetry add pymongo"
+    uri = os.environ.get("MONGODB_URI", "").strip()
+    if not uri:
+        return "MONGODB_URI no configurado."
+
+    now = datetime.now(timezone.utc)
+
+    # Resolver mes y año
+    if mes == 0 and año == 0:
+        # Sin parámetros: mes anterior completo
+        primer_dia_mes_actual = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        ultimo_mes = primer_dia_mes_actual - timedelta(days=1)
+        mes_r, año_r = ultimo_mes.month, ultimo_mes.year
+    elif mes == 0:
+        # Solo año dado: mes anterior dentro de ese año
+        primer_dia_mes_actual = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        ultimo_mes = primer_dia_mes_actual - timedelta(days=1)
+        mes_r, año_r = ultimo_mes.month, año
+    elif año == 0:
+        # Solo mes dado: usar año actual
+        mes_r, año_r = mes, now.year
+    else:
+        mes_r, año_r = mes, año
+
+    if not (1 <= mes_r <= 12):
+        return f"Mes inválido: {mes_r}. Debe ser entre 1 y 12."
+
+    _, ultimo_dia = monthrange(año_r, mes_r)
+    desde_dt = datetime(año_r, mes_r, 1, 0, 0, 0, tzinfo=timezone.utc)
+    hasta_dt = datetime(año_r, mes_r, ultimo_dia, 23, 59, 59, 999999, tzinfo=timezone.utc)
+
+    dias = _get_historial_por_dia(
+        db_name=db_name,
+        desde=desde_dt.timestamp(),
+        hasta=hasta_dt.timestamp(),
+    )
+    if not dias:
+        return f"No hay registros para {año_r}-{mes_r:02d}."
+
+    # Consumo de cada día = litros_inicio - litros_fin (solo caídas)
+    total = 0.0
+    dia_mayor_consumo, max_dia = None, 0.0
+    for d in dias:
+        consumo_dia = (d["litros_inicio"] or 0) - (d["litros_fin"] or 0)
+        if consumo_dia > 0:
+            total += consumo_dia
+            if consumo_dia > max_dia:
+                max_dia, dia_mayor_consumo = consumo_dia, d["dia"]
+
+    dias_con_datos = len(dias)
+    consumo_diario_prom = total / dias_con_datos if dias_con_datos > 0 else 0
+
+    return json.dumps({
+        "mes": f"{año_r}-{mes_r:02d}",
+        "dias_en_mes": ultimo_dia,
+        "dias_con_datos": dias_con_datos,
+        "total_consumido_l": round(total, 1),
+        "consumo_diario_promedio_l": round(consumo_diario_prom, 1),
+        "dia_mayor_consumo": dia_mayor_consumo,
+        "max_consumo_dia_l": round(max_dia, 1),
+    }, ensure_ascii=False)
+
+
+@mcp.tool()
 def get_top_consumo(top: int = 5, db_name: str = "tomi-db") -> str:
     """Retorna los N dias con mayor consumo de agua."""
     if not _HAS_PYMONGO:
@@ -668,31 +836,21 @@ def get_top_consumo(top: int = 5, db_name: str = "tomi-db") -> str:
     uri = os.environ.get("MONGODB_URI", "").strip()
     if not uri:
         return "MONGODB_URI no configurado."
-    docs = _get_estanque_historial(db_name=db_name, limit=100000)
-    if not docs:
+    dias = _get_historial_por_dia(db_name=db_name)
+    if not dias:
         return "No hay registros en MongoDB."
-    docs_asc = sorted(docs, key=_ts_to_float)
-    by_day = {}
-    for doc in docs_asc:
-        ts = _ts_to_float(doc)
-        if ts:
-            from datetime import datetime, timezone
-            day = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
-            by_day.setdefault(day, []).append(doc)
+
     day_stats = []
-    for day, ddocs in by_day.items():
-        if len(ddocs) < 2:
-            continue
-        stats = _compute_consumo_docs(sorted(ddocs, key=_ts_to_float))
-        day_stats.append({
-            "fecha": day,
-            "total_consumido_l": round(stats["total_consumido"], 1),
-            "promedio_lh": round(stats["promedio_lh"], 2),
-            "hora_pico": stats["hora_pico"],
-            "max_consumo_hora_l": round(stats["max_consumo_hora"], 1),
-            "registros": stats["registros"],
-        })
-    day_stats.sort(key=lambda x: x["total_consumido_l"], reverse=True)
+    for d in dias:
+        consumo_dia = (d["litros_inicio"] or 0) - (d["litros_fin"] or 0)
+        if consumo_dia > 0:
+            day_stats.append({
+                "fecha": d["dia"],
+                "consumo_dia_l": round(consumo_dia, 1),
+                "registros": d["registros"],
+            })
+
+    day_stats.sort(key=lambda x: x["consumo_dia_l"], reverse=True)
     ranking = day_stats[:top]
     for i, d in enumerate(ranking, 1):
         d["posicion"] = i
