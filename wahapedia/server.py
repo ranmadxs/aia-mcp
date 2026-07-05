@@ -208,9 +208,9 @@ def _find_aia_root() -> Path | None:
 
 
 def _image_cache_path(slug: str) -> Path:
-    """Ruta permanente de imagen: .aia/images/<slug>.jpg"""
+    """Ruta permanente de imagen: .aia/images/wahapedia/<slug>.jpg"""
     root = _find_aia_root() or Path.cwd()
-    img_dir = root / ".aia" / "images"
+    img_dir = root / ".aia" / "images" / "wahapedia"
     img_dir.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^a-zA-Z0-9_-]", "_", slug)
     return img_dir / f"{safe}.jpg"
@@ -401,7 +401,7 @@ def _fetch_unit_stats(faction: str, unit_slug: str) -> str | None:
             img_cached = _get_or_download_image(faction, unit_slug)
             if not img_cached:
                 def _bg_fetch(name=unit_name, slug=unit_slug):
-                    img_url = _search_image_bing(f"{name} Warhammer 40k Tyranids miniature")
+                    img_url = _search_image_bing(f"{name} Warhammer 40k miniature")
                     if img_url:
                         _download_image(img_url, slug)
                     else:
@@ -465,16 +465,16 @@ def get_unit_stats(query: str, faction: str = "") -> str:
 
     Args:
         query: Nombre de la unidad (ej: "Rhino", "Saint Celestine", "Space Marine")
-        faction: Facción opcional (ej: "space-marines", "adepta-sororitas"). Si está vacío, busca en todas.
+        faction: Facción requerida (ej: "space-marines", "adepta-sororitas").
 
     Returns:
         Estadísticas de la unidad (M, T, Sv, W, Ld, OC, etc.) y URL de Wahapedia.
     """
-    fac = _resolve_faction_slug(faction) if faction and faction.strip() else None
+    fac = _resolve_faction_slug(faction) if faction else None
+    if not fac:
+        valid = ", ".join(FACTIONS[:6]) + ", ..."
+        return f"Facción requerida. Usa get_factions() para ver la lista. Ejemplos: {valid}"
     found = _find_unit_slug(query, fac)
-    # Si no se encontró con la facción dada, buscar en todas (typo del LLM)
-    if not found and fac:
-        found = _find_unit_slug(query, None)
     if not found:
         return f"No se encontró la unidad '{query}' en Wahapedia. Prueba con otro nombre o especifica la facción."
     fac, unit_slug = found
@@ -483,14 +483,12 @@ def get_unit_stats(query: str, faction: str = "") -> str:
         return f"Error al obtener datos de {unit_slug} en Wahapedia."
     img_path = _get_or_download_image(fac, unit_slug)
     if not img_path:
-        # No en cache: descarga en background, la imagen estará disponible en la próxima consulta
+        # Descargar sincrónicamente para que la imagen esté disponible en esta misma respuesta
         unit_name = unit_slug.replace("-", " ").title()
-        def _bg_fetch(name=unit_name, slug=unit_slug):
-            img_url = _search_image_bing(name)
-            if img_url:
-                _download_image(img_url, slug)
-        threading.Thread(target=_bg_fetch, daemon=True).start()
-    else:
+        img_url = _search_image_bing(unit_name)
+        if img_url:
+            img_path = _download_image(img_url, unit_slug)
+    if img_path:
         result += f"\n\nIMAGE_PATH>> {img_path}"
     return result
 
@@ -549,15 +547,14 @@ def get_unit_image(query: str, faction: str = "") -> str:
 def search_wahapedia(query: str) -> str:
     """
     Busca información en Wahapedia. Útil para preguntas en español como:
-    - "estadísticas de un Rhino"
-    - "datos de Saint Celestine"
-    - "características de un Space Marine"
+    - "estadísticas de Saint Celestine de Adepta Sororitas"
+    - "datos de Rhino de Space Marines"
 
     Args:
-        query: Pregunta o búsqueda en español (ej: "estadísticas de Saint Celestine")
+        query: Pregunta o búsqueda en español con formato "estadísticas de <unidad> de <facción>"
 
     Returns:
-        Estadísticas de la unidad encontrada o mensaje de error.
+        Estadísticas de la unidad encontrada o mensaje de error indicando el formato requerido.
     """
     # Extraer nombre de unidad de frases comunes
     q = query.strip()
@@ -578,7 +575,17 @@ def search_wahapedia(query: str) -> str:
         if q.lower().startswith(prefix):
             q = q[len(prefix) :].strip()
             break
-    return get_unit_stats(q, "")
+    # Extraer facción de "unidad de <facción>"
+    faction = ""
+    if " de " in q:
+        parts = q.rsplit(" de ", 1)
+        q = parts[0].strip()
+        faction = parts[1].strip()
+    # Validar que incluye facción
+    if not faction:
+        name = ", ".join(FACTIONS[:6]) + ", ..."
+        return f"Facción requerida. Formato: \"{q} de <facción>\". Ejemplos de facciones: {name}"
+    return get_unit_stats(q, faction)
 
 
 def _fetch_unit_stratagems_raw(faction: str, unit_slug: str) -> list[dict] | None:
