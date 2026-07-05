@@ -89,7 +89,7 @@ def _get_unit_list(faction: str) -> list[str]:
             divs = soup.find_all("div", {"class": "NavDropdown-content_P"})
             if not divs:
                 return []
-            urls = divs[0].find_all("a", {"class": "contentColor"})
+            urls = divs[0].find_all("a", {"class": "cnClr"})
             prefix = f"/{EDITION}/factions/{faction}/"
             units = []
             for a in urls:
