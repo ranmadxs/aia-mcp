@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aia-mcp"
-version = "0.6.4"
+version = "0.8.2"
 description = "Servidor MCP para el agente aia (amanda-IA)"
 readme = "README.md"
 packages = [

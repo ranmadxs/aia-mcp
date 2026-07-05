@@ -19,6 +19,15 @@ import httpx
 import tomllib
 from mcp.server.fastmcp import FastMCP
 
+# Carga .env desde la carpeta del servidor si existe
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    # Busca .env en la carpeta del servidor y luego en la raíz del proyecto
+    _load_dotenv(Path(__file__).resolve().parent / ".env")
+    _load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+except ImportError:
+    pass
+
 logger = logging.getLogger("mangadex")
 
 mcp = FastMCP(
@@ -39,8 +48,11 @@ CDN = "https://uploads.mangadex.org"
 HEADERS = {"User-Agent": "aia-mcp/mangadex (github.com/ranmadxs/aia-mcp)"}
 TIMEOUT = 15.0
 
-# Directorio de descarga por defecto: ~/Manga
-_DEFAULT_DOWNLOAD_DIR = str(Path.home() / "Manga")
+# Directorio de descarga: env var AIA_MANGA_DIR o ~/.aia/manga como fallback
+_DEFAULT_DOWNLOAD_DIR = os.environ.get(
+    "AIA_MANGA_DIR",
+    str(Path.home() / "trabajos" / "amanda-IA" / ".aia" / "manga"),
+)
 
 # Ruta al CLI de mangadex-downloader (instalado con pipx)
 _MDX_CLI = str(Path.home() / ".local" / "bin" / "mangadex-dl")
@@ -683,9 +695,528 @@ def _extract_id(url_or_id: str) -> str:
 
 
 def _to_url(url_or_id: str) -> str:
-    """Convierte UUID a URL de MangaDex si no es ya una URL."""
-    url_or_id = url_or_id.strip()
-    if url_or_id.startswith("http"):
-        return url_or_id
-    uid = _extract_id(url_or_id)
+    """Convierte UUID a URL de MangaDex si no es ya una URL. Siempre usa /title/<uuid> limpio."""
+    uid = _extract_id(url_or_id.strip())
     return f"https://mangadex.org/title/{uid}"
+
+
+# ── Download live state ────────────────────────────────────────────────────────
+
+_dl_state: dict = {
+    "active": False,
+    "manga_title": "",
+    "chapter_current": 0,
+    "chapter_total": 0,
+    "volume_current": 0,      # volumen que se está descargando ahora
+    "volume_total": 0,        # total de volúmenes
+    "volume_label": "",       # e.g. "Vol. 3"
+    "volume_chapters": 0,     # capítulos en el volumen actual
+    "volumes_done": [],       # lista de volúmenes completados
+    "pct": 0.0,
+    "bandwidth": "",
+    "current_file": "",
+    "status": "idle",
+    "log": "",
+    "dest": "",
+}
+_dl_version: int = 0
+_dl_lock = threading.Lock()
+_dl_proc: subprocess.Popen | None = None
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*[mKJHfABCDsu]|\r", "", text)
+
+
+_last_chapter_seen: int = -1  # para detectar cambios de capítulo
+
+
+def _parse_mdl_line(line: str) -> dict:
+    global _last_chapter_seen
+    line = _strip_ansi(line).strip()
+    updates: dict = {}
+    if not line:
+        return updates
+    updates["log"] = line[:250]
+
+    # mangadex-dl: "[INFO] Downloading [Group] Volume. X Chapter. Y page Z"
+    m = re.search(r"Chapter\.\s*(\d+(?:\.\d+)?)\s+page\s+(\d+)", line, re.I)
+    if m:
+        ch = float(m.group(1))
+        updates["status"] = "downloading"
+        updates["current_file"] = f"Cap {ch} pág {m.group(2)}"
+        if int(ch) != _last_chapter_seen:
+            _last_chapter_seen = int(ch)
+            updates["chapter_current"] = _last_chapter_seen
+
+    # Patrones alternativos X/Y
+    if "chapter_current" not in updates:
+        for pat in [
+            r"chapter[s]?\s+(\d+)\s*/\s*(\d+)",
+            r"\((\d+)\s*/\s*(\d+)\)",
+            r"(\d+)\s*/\s*(\d+)\s+chapter",
+        ]:
+            m = re.search(pat, line, re.I)
+            if m:
+                cur, total = int(m.group(1)), int(m.group(2))
+                if 0 < cur <= total:
+                    updates["chapter_current"] = cur
+                    updates["chapter_total"] = total
+                    updates["pct"] = round(cur / total * 100, 1)
+                break
+
+    # Total de capítulos encontrados
+    m = re.search(r"(?:found|total|got)[:\s]+(\d+)\s+chapter", line, re.I)
+    if m:
+        updates["chapter_total"] = int(m.group(1))
+
+    # Ancho de banda del tqdm: "NNk/NNNk [time, speed]" o "NN MB/s"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(MB|KB|GB|kB)/s", line, re.I)
+    if m:
+        updates["bandwidth"] = f"{m.group(1)} {m.group(2)}/s"
+
+    # Archivo actual
+    m = re.search(r"(\S+\.(?:jpg|jpeg|png|webp|gif))", line, re.I)
+    if m:
+        updates["current_file"] = m.group(1).split("/")[-1]
+
+    # Estado
+    if re.search(r"completed|finished|success", line, re.I):
+        updates["status"] = "completed"
+    elif re.search(r"error|failed|exception", line, re.I):
+        updates["status"] = "error"
+    elif re.search(r"download", line, re.I):
+        updates["status"] = "downloading"
+    elif re.search(r"fetch|connect|resolv", line, re.I):
+        updates["status"] = "fetching"
+
+    return updates
+
+
+def _bw_monitor(dest: str) -> None:
+    """Thread secundario: calcula ancho de banda midiendo cambio de bytes en disco."""
+    import time as _t
+    dest_path = Path(dest)
+    prev_size = 0
+    prev_ts = _t.time()
+    while True:
+        with _dl_lock:
+            if not _dl_state["active"]:
+                break
+        _t.sleep(1.5)
+        try:
+            size = sum(f.stat().st_size for f in dest_path.rglob("*") if f.is_file())
+        except Exception:
+            continue
+        now = _t.time()
+        dt = now - prev_ts
+        if dt > 0 and size > prev_size:
+            bps = (size - prev_size) / dt
+            bw = f"{bps/1e6:.1f} MB/s" if bps >= 1e6 else f"{bps/1e3:.0f} KB/s"
+            with _dl_lock:
+                global _dl_version
+                _dl_state["bandwidth"] = bw
+                _dl_version += 1
+        prev_size = size
+        prev_ts = now
+
+
+def _run_download_bg(cmds: list[list[str]], manga_title: str, chapter_total: int, dest: str) -> None:
+    global _dl_state, _dl_version, _dl_proc
+    import time as _t
+
+    # Calcular capítulos por volumen desde los comandos
+    # Los cmds llevan --start-volume/--end-volume para filtrar
+    vol_total = len(cmds)
+    volumes_done: list[str] = []
+
+    with _dl_lock:
+        _dl_state.update({
+            "active": True,
+            "manga_title": manga_title,
+            "chapter_current": 0,
+            "chapter_total": chapter_total,
+            "volume_current": 0,
+            "volume_total": vol_total,
+            "volume_label": "",
+            "volume_chapters": 0,
+            "volumes_done": [],
+            "pct": 0.0,
+            "bandwidth": "",
+            "current_file": "",
+            "status": "starting",
+            "log": f"Iniciando descarga ({vol_total} volúmenes, {chapter_total} caps)...",
+            "dest": dest,
+        })
+        _dl_version += 1
+
+    threading.Thread(target=_bw_monitor, args=(dest,), daemon=True).start()
+
+    try:
+        for vol_idx, cmd in enumerate(cmds):
+            # Extraer número de volumen del comando
+            vol_label = ""
+            if "--start-volume" in cmd:
+                vi = cmd.index("--start-volume")
+                vol_label = f"Vol. {cmd[vi+1]}"
+
+            # Contar capítulos en este volumen contando los ya descargados + estimación
+            vol_ch_done = sum(
+                len(list((Path(dest) / v).glob("*.cbz")))
+                for v in volumes_done
+            ) if volumes_done else 0
+
+            with _dl_lock:
+                _dl_state.update({
+                    "status": "downloading",
+                    "volume_current": vol_idx + 1,
+                    "volume_label": vol_label or f"lote {vol_idx+1}",
+                    "volumes_done": list(volumes_done),
+                    "log": f"▶ {vol_label or 'descargando'} ({vol_idx+1}/{vol_total})",
+                    "active": True,
+                })
+                _dl_version += 1
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env={**os.environ, "FORCE_COLOR": "0", "NO_COLOR": "1"},
+            )
+            with _dl_lock:
+                _dl_proc = proc
+
+            vol_ch_seen: set = set()
+            for raw in proc.stdout:
+                upd = _parse_mdl_line(raw)
+                if upd:
+                    with _dl_lock:
+                        _dl_state.update(upd)
+                        _dl_state["active"] = True
+                        # Rastrear capítulos únicos vistos en este volumen
+                        if "chapter_current" in upd:
+                            vol_ch_seen.add(upd["chapter_current"])
+                            _dl_state["volume_chapters"] = len(vol_ch_seen)
+                        # Recalcular pct global
+                        total = _dl_state.get("chapter_total") or 0
+                        cur = _dl_state.get("chapter_current") or 0
+                        if total > 0 and "pct" not in upd:
+                            _dl_state["pct"] = round(cur / total * 100, 1)
+                        _dl_version += 1
+
+            proc.wait()
+            with _dl_lock:
+                _dl_proc = None
+
+            if proc.returncode != 0:
+                with _dl_lock:
+                    _dl_state.update({
+                        "status": "error",
+                        "log": f"❌ Error en {vol_label} (código {proc.returncode})",
+                        "active": False,
+                    })
+                    _dl_version += 1
+                return
+
+            # Volumen completado
+            volumes_done.append(vol_label or f"lote {vol_idx+1}")
+            with _dl_lock:
+                _dl_state["volumes_done"] = list(volumes_done)
+                _dl_state["log"] = f"✓ {vol_label} completado ({len(volumes_done)}/{vol_total})"
+                _dl_version += 1
+
+        # Todos los volúmenes completados
+        with _dl_lock:
+            ch_total = _dl_state["chapter_total"]
+            _dl_state.update({
+                "status": "completed",
+                "pct": 100.0,
+                "chapter_current": ch_total,
+                "volume_current": vol_total,
+                "volumes_done": list(volumes_done),
+                "log": f"✅ Descarga completada — {vol_total} volúmenes, {ch_total} caps",
+                "active": False,
+            })
+            _dl_version += 1
+        try:
+            (Path(_DEFAULT_DOWNLOAD_DIR) / ".dl_resume.json").unlink(missing_ok=True)
+        except Exception:
+            pass
+        # Pequeña pausa para que el SSE emita el estado final, luego resetear a idle
+        import time as _t2; _t2.sleep(3)
+        with _dl_lock:
+            _dl_state.update({
+                "active": False, "manga_title": "", "chapter_current": 0,
+                "chapter_total": 0, "pct": 0.0, "bandwidth": "",
+                "current_file": "", "status": "idle", "log": "", "dest": "",
+            })
+            _dl_version += 1
+    except Exception as exc:
+        with _dl_lock:
+            _dl_proc = None
+            _dl_state.update({"status": "error", "log": f"❌ {exc}", "active": False})
+            _dl_version += 1
+        import time as _t2; _t2.sleep(3)
+        with _dl_lock:
+            _dl_state.update({
+                "active": False, "manga_title": "", "chapter_current": 0,
+                "chapter_total": 0, "pct": 0.0, "bandwidth": "",
+                "current_file": "", "status": "idle", "log": "",
+            })
+            _dl_version += 1
+
+
+@mcp.tool()
+def start_download(
+    url_or_id: str,
+    language: str = "es",
+    save_as: str = "cbz",
+    start_chapter: str = "",
+    end_chapter: str = "",
+) -> str:
+    """
+    Inicia la descarga de un manga en segundo plano y retorna inmediatamente.
+    Usa /live (o get_download_status) para seguir el progreso en tiempo real.
+
+    Args:
+        url_or_id:     URL o UUID del manga en MangaDex.
+        language:      Idioma (ej: "es", "en"). Default "es".
+        save_as:       Formato: cbz, raw, pdf, epub. Default "cbz".
+        start_chapter: Capítulo inicial (opcional).
+        end_chapter:   Capítulo final (opcional).
+
+    Returns:
+        Confirmación de inicio con total de capítulos y destino.
+    """
+    global _dl_proc
+    with _dl_lock:
+        if _dl_state.get("active"):
+            return f"⚠️ Ya hay una descarga activa: {_dl_state['manga_title']} ({_dl_state['pct']:.0f}%). Usa stop_download() primero."
+
+    # Resolver título a UUID siempre que no sea un UUID puro
+    _slug_match = re.search(r"/title/[^/]+/([^/?#]+)", url_or_id)
+    _is_pure_uuid = bool(_UUID_RE.fullmatch(url_or_id.strip()))
+
+    if _slug_match:
+        # URL con slug: buscar por el título del slug para evitar UUIDs hallucinated
+        _raw_slug = _slug_match.group(1)
+        # Eliminar sufijos de idioma comunes: -es-la, -es, -en, -ja, -zh, -fr, -pt-br
+        _raw_slug = re.sub(r"-(es-la|pt-br|zh-hk|zh-cn|[a-z]{2})$", "", _raw_slug)
+        _title_query = _raw_slug.replace("-", " ")
+        search_res = _get("/manga", {
+            "title": _title_query,
+            "limit": 1,
+            "order[relevance]": "desc",
+            "contentRating[]": ["safe", "suggestive", "erotica", "pornographic"],
+        })
+        hits = search_res.get("data", [])
+        if hits:
+            url_or_id = hits[0]["id"]
+    elif not _is_pure_uuid and not url_or_id.strip().startswith("http"):
+        # Texto libre: buscar por título
+        search_res = _get("/manga", {
+            "title": url_or_id.strip(),
+            "limit": 1,
+            "order[relevance]": "desc",
+            "contentRating[]": ["safe", "suggestive", "erotica", "pornographic"],
+        })
+        hits = search_res.get("data", [])
+        if not hits:
+            return f"❌ No se encontró '{url_or_id}' en MangaDex. Intenta con search_manga() primero."
+        url_or_id = hits[0]["id"]
+
+    manga_id = _extract_id(url_or_id)
+    dl_url = _to_url(url_or_id)
+
+    # Obtener metadata del manga
+    manga_title = manga_id
+    chapter_total = 0
+    volumes = []
+    try:
+        data = _get(f"/manga/{manga_id}", {"includes[]": ["cover_art"]})
+        m = data.get("data", {})
+        manga_title = _title(m.get("attributes", {})) if m else manga_id
+
+        # Obtener volúmenes disponibles en el idioma pedido
+        agg = _get(f"/manga/{manga_id}/aggregate", {"translatedLanguage[]": [language]})
+        vol_data = agg.get("volumes", {})
+        if not vol_data and language != "en":
+            agg = _get(f"/manga/{manga_id}/aggregate", {"translatedLanguage[]": ["es-la"]})
+            vol_data = agg.get("volumes", {})
+
+        # Ordenar volúmenes: numéricos primero, luego "none"
+        def _vol_sort_key(v):
+            try: return (0, float(v))
+            except: return (1, v)
+
+        volumes = sorted(vol_data.keys(), key=_vol_sort_key)
+        chapter_total = sum(v.get("count", 0) for v in vol_data.values())
+        if chapter_total == 0:
+            ch_data = _get(f"/manga/{manga_id}/feed", {"translatedLanguage[]": language, "limit": 1})
+            chapter_total = ch_data.get("total", 0)
+    except Exception as _meta_err:
+        logger.warning("No se pudo obtener metadata del manga %s: %s", manga_id, _meta_err)
+
+    # Estructura: manga_title/Vol. {volume}/Ch. {chapter}.cbz
+    manga_dest = str(Path(_DEFAULT_DOWNLOAD_DIR) / manga_title)
+    Path(manga_dest).mkdir(parents=True, exist_ok=True)
+    dest = manga_dest
+
+    # Construir lista de comandos: uno por volumen en orden
+    def _make_cmd(vol_num=None):
+        vol_path = manga_dest + (f"/Vol. {vol_num}" if vol_num and vol_num != "none" else "/Sin volumen")
+        c = [_MDX_CLI, dl_url, "--save-as", save_as, "-lang", language,
+             "--path", vol_path, "--filename-chapter", "Ch. {chapter}",
+             "--log-level", "INFO"]
+        if vol_num and vol_num != "none":
+            c += ["--start-volume", vol_num, "--end-volume", vol_num]
+        if start_chapter:
+            c += ["--start-chapter", start_chapter]
+        if end_chapter:
+            c += ["--end-chapter", end_chapter]
+        return c
+
+    def _vol_already_done(vol_num) -> bool:
+        """True si el directorio del volumen tiene TODOS los capítulos esperados."""
+        if not vol_num or vol_num == "none":
+            return False
+        vol_dir = Path(manga_dest) / f"Vol. {vol_num}"
+        if not vol_dir.is_dir():
+            return False
+        cbz_count = len(list(vol_dir.glob("*.cbz")))
+        if cbz_count == 0:
+            return False
+        # Comparar con capítulos únicos del aggregate (no "count" que incluye duplicados de grupos)
+        chapters_dict = vol_data.get(vol_num, {}).get("chapters", {})
+        expected = len(chapters_dict) if chapters_dict else vol_data.get(vol_num, {}).get("count", 0)
+        if expected > 0 and cbz_count < expected:
+            logger.info("Resume: Vol. %s incompleto (%d/%d caps), se re-descargará", vol_num, cbz_count, expected)
+            return False
+        return True
+
+    if volumes:
+        skipped = [v for v in volumes if _vol_already_done(v)]
+        pending = [v for v in volumes if not _vol_already_done(v)]
+        cmds = [_make_cmd(v) for v in pending]
+        if skipped:
+            logger.info("Resume: saltando %d volúmenes ya descargados: %s", len(skipped), skipped)
+    else:
+        skipped = []
+        cmds = [_make_cmd()]  # fallback: todo de una vez
+
+    # Guardar estado de resume para que el scheduler de aia pueda reiniciar si cae el MCP
+    _resume_file = Path(_DEFAULT_DOWNLOAD_DIR) / ".dl_resume.json"
+    try:
+        _resume_file.write_text(json.dumps({
+            "url_or_id": dl_url,
+            "language": language,
+            "save_as": save_as,
+            "manga_title": manga_title,
+            "chapter_total": chapter_total,
+            "start_chapter": start_chapter,
+            "end_chapter": end_chapter,
+            "volumes": volumes,
+        }))
+    except Exception:
+        pass
+
+    vol_total = len(volumes) if volumes else 1
+    vol_pending = len(cmds)
+    if skipped:
+        last_skipped = skipped[-1]
+        next_vol = (int(last_skipped) + 1) if last_skipped not in ("none", "") else "?"
+        resume_note = f" (retomando desde Vol. {next_vol}, {len(skipped)} ya descargados)"
+    else:
+        resume_note = ""
+    vol_info = f"{vol_pending}/{vol_total} volúmenes pendientes{resume_note}" if volumes else "sin info de volúmenes"
+
+    if not cmds:
+        # Todo ya descargado
+        _resume_file = Path(_DEFAULT_DOWNLOAD_DIR) / ".dl_resume.json"
+        try:
+            _resume_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return (
+            f"✅ '{manga_title}' ya está completamente descargado ({vol_total} volúmenes).\n"
+            f"   Destino: {dest}"
+        )
+
+    threading.Thread(
+        target=_run_download_bg,
+        args=(cmds, manga_title, chapter_total, dest),
+        daemon=True,
+    ).start()
+
+    live_url = "http://localhost:8009/live"
+    return (
+        f"▶️ Descarga iniciada en segundo plano\n"
+        f"   Manga: {manga_title}\n"
+        f"   Capítulos: {chapter_total} en '{language}' · {vol_info}\n"
+        f"   Destino: {dest}\n"
+        f"[LIVE:{live_url}:manga]"
+    )
+
+
+@mcp.tool()
+def stop_download() -> str:
+    """Detiene la descarga activa en segundo plano."""
+    global _dl_proc
+    with _dl_lock:
+        proc = _dl_proc
+        active = _dl_state.get("active", False)
+    if not active or proc is None:
+        return "No hay descarga activa."
+    try:
+        proc.terminate()
+        return f"⏹️ Descarga de '{_dl_state['manga_title']}' detenida."
+    except Exception as e:
+        return f"❌ Error al detener: {e}"
+
+
+@mcp.tool()
+def get_download_status() -> str:
+    """Retorna el estado actual de una descarga en progreso o completada."""
+    with _dl_lock:
+        s = dict(_dl_state)
+    if not s["manga_title"]:
+        return "No hay descarga activa ni reciente."
+    bar_filled = int(s["pct"] / 5)
+    bar = "█" * bar_filled + "░" * (20 - bar_filled)
+    lines = [
+        f"**{s['manga_title']}**",
+        f"Estado : {s['status']}",
+        f"Progreso: [{bar}] {s['pct']:.1f}%",
+        f"Capítulo: {s['chapter_current']}/{s['chapter_total']}",
+    ]
+    if s["bandwidth"]:
+        lines.append(f"Velocidad: {s['bandwidth']}")
+    if s["current_file"]:
+        lines.append(f"Archivo: {s['current_file']}")
+    if s["log"]:
+        lines.append(f"Log: {s['log']}")
+    return "\n".join(lines)
+
+
+@mcp.custom_route("/live", methods=["GET"])
+async def live_stream(request):
+    """SSE endpoint: emite el estado de descarga en tiempo real cada 0.5 s."""
+    import asyncio as _asyncio
+    from sse_starlette.sse import EventSourceResponse
+
+    async def _gen():
+        last_ver = -1
+        while True:
+            cur_ver = _dl_version
+            if cur_ver != last_ver:
+                last_ver = cur_ver
+                with _dl_lock:
+                    state = dict(_dl_state)
+                yield {"data": json.dumps(state)}
+            else:
+                yield {"comment": "keepalive"}
+            await _asyncio.sleep(0.5)
+
+    return EventSourceResponse(_gen())

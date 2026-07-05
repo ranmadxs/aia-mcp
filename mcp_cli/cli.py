@@ -5,6 +5,7 @@ import multiprocessing
 import os
 import sys
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -37,6 +38,52 @@ SERVER_PORTS: dict[str, int] = {
 # Default HTTP
 DEFAULT_HTTP_HOST = "0.0.0.0"
 
+# Directorio de logs
+_LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+
+
+def _read_version() -> str:
+    try:
+        import tomllib
+        toml_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        with open(toml_path, "rb") as f:
+            data = tomllib.load(f)
+        return data.get("tool", {}).get("poetry", {}).get("version", "?")
+    except Exception:
+        return "?"
+
+
+def _setup_logging(server_name: str) -> None:
+    """Configura logging a consola + archivo rotado por día."""
+    _LOGS_DIR.mkdir(exist_ok=True)
+    log_file = _LOGS_DIR / f"{server_name}_{time.strftime('%Y%m%d')}.log"
+
+    fmt = logging.Formatter(
+        f"%(asctime)s [{server_name}] [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    file_handler.setLevel(logging.DEBUG)
+
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setFormatter(fmt)
+    console_handler.setLevel(logging.INFO)
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.handlers.clear()
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
+
+    # Silenciar loggers muy verbosos
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+    logging.info("aia-mcp v%s  |  %s  |  logs → %s", _read_version(), server_name, log_file)
+
 
 def _run_http_server(server_name: str) -> None:
     """Ejecuta un servidor HTTP en el proceso actual (para multiprocessing)."""
@@ -44,13 +91,7 @@ def _run_http_server(server_name: str) -> None:
         os.environ.setdefault("FASTMCP_HOST", DEFAULT_HTTP_HOST)
         os.environ["FASTMCP_PORT"] = str(SERVER_PORTS[server_name])
         os.environ.setdefault("FASTMCP_LOG_LEVEL", "INFO")
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(message)s",
-            stream=sys.stderr,
-            force=True,
-        )
-        logging.getLogger("uvicorn").setLevel(logging.WARNING)
+        _setup_logging(server_name)
         module_name, attr = SERVERS[server_name]
         module = __import__(module_name, fromlist=[attr])
         mcp = getattr(module, attr)
@@ -65,7 +106,7 @@ def _run_http_server(server_name: str) -> None:
             log_level="warning",
         )
     except Exception as e:
-        print(f"Error en {server_name}: {e}", file=sys.stderr)
+        logging.exception("Error fatal en %s: %s", server_name, e)
         raise
 
 
@@ -129,16 +170,8 @@ def main() -> None:
 
     if use_http:
         port = os.environ.get("FASTMCP_PORT", "8001")
-        print(f"MCP HTTP en http://{DEFAULT_HTTP_HOST}:{port}/mcp")
-        # Log: nombre MCP + tool + params
-        os.environ.setdefault("FASTMCP_LOG_LEVEL", "INFO")
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(message)s",
-            stream=sys.stderr,
-            force=True,
-        )
-        logging.getLogger("uvicorn").setLevel(logging.WARNING)
+        _setup_logging(server_name)
+        logging.info("MCP HTTP en http://%s:%s/mcp", DEFAULT_HTTP_HOST, port)
         import uvicorn
 
         from mcp_cli.logging_middleware import RequestLoggingMiddleware
