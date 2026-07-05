@@ -88,13 +88,13 @@ def get_proxima_reserva() -> str:
 
 
 @mcp.tool()
-def get_reservas_airbnb(solo_futuras: bool = True) -> str:
+def get_reservas_futuras(solo_futuras: bool = True) -> str:
     """
     Obtiene todas las reservas desde MongoDB.
 
     Args:
-        solo_futuras: Si True (default), solo reservas con checkout >= hoy.
-                      Si False, retorna todas.
+        solo_futuras: Si True (default), solo reservas con checkout > hoy.
+                      Si False, retorna todas las reservas históricas y futuras.
 
     Returns:
         Lista de reservas con fechas, huésped, precio, notas, etc.
@@ -983,3 +983,10 @@ def get_airbnb_status() -> str:
         "mongodb": "conectado" if mongo_ok else "desconectado",
         "db": AIRBNB_DB,
     })
+
+
+# Alias de compatibilidad: get_reservas_mes → get_calendario_mes_airbnb
+@mcp.tool()
+def get_reservas_mes(mes: int, anio: Optional[int] = None) -> str:
+    """Alias de get_calendario_mes_airbnb para obtener reservas del mes."""
+    return get_calendario_mes_airbnb(mes, anio)
