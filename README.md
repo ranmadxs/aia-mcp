@@ -106,5 +106,8 @@ Variables en `.env`: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`,
 
 - **get_unit_stats(query, faction)**: Estadísticas de una unidad.
 - **search_wahapedia(query)**: Búsqueda en español.
+- **get_factions()**: Lista todas las facciones.
+- **get_units(faction)**: Unidades de una facción.
+- **get_stratagems(faction)**: Estratagemas de una facción.
 
-Cache: config en `.aia/mcp.json` → `wahapedia.cache` (`enabled`, `dir`, `ttlDays`). Default 60 días. Guarda en `.aia/cache/wahapedia/`.
+Cache: config por variables de entorno (`WAHAPEDIA_CACHE_ENABLED`, `WAHAPEDIA_CACHE_DIR`, `WAHAPEDIA_CACHE_TTL_DAYS`). Por defecto deshabilitado. Si habilitas, guarda en `.aia/cache/wahapedia/` y TTL de 60 días.

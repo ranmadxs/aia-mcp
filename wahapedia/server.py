@@ -199,12 +199,12 @@ def _fetch_stratagems(faction: str) -> str | None:
 
 
 def _find_aia_root() -> Path | None:
-    """Encuentra el directorio raíz del proyecto amanda-IA (donde está .aia/)."""
-    from wahapedia.cache import _find_mcp_config
-    cfg = _find_mcp_config()
-    if cfg:
-        return cfg.parent.parent  # .aia/mcp.json → proyecto
-    return Path.cwd()
+    """Encuentra el directorio raíz del proyecto (donde está .aia/)."""
+    cwd = Path.cwd()
+    for parent in [cwd, *cwd.parents]:
+        if (parent / ".aia").exists():
+            return parent
+    return cwd
 
 
 def _image_cache_path(slug: str) -> Path:

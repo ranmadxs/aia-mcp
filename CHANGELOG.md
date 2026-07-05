@@ -32,7 +32,7 @@ Servidores MCP custom para el agente amanda-IA.
 
 ### Agregado
 - **Servidor MCP Tinaja/Monitor**: `get_lectura_actual()`, `calculate_tinaja_level()`
-- Caché de respuestas Wahapedia en disco (configurable vía `mcp.json`)
+- Caché de respuestas Wahapedia en disco (configurable vía variables de entorno)
 - Log de requests HTTP y caché hit/miss en todos los servidores
 
 ---
