@@ -21,6 +21,7 @@ SERVERS: dict[str, tuple[str, str]] = {
     "charts": ("charts.server", "mcp"),
     "email": ("mcp_email.server", "mcp"),
     "mangadex": ("mangadex.server", "mcp"),
+    "swagger": ("swagger.server", "run_server"),
 }
 
 # Puerto HTTP por servidor
@@ -33,6 +34,7 @@ SERVER_PORTS: dict[str, int] = {
     "charts": 8007,
     "email": 8008,
     "mangadex": 8009,
+    "swagger": 8010,
 }
 
 # Default HTTP
@@ -94,6 +96,13 @@ def _run_http_server(server_name: str) -> None:
         _setup_logging(server_name)
         module_name, attr = SERVERS[server_name]
         module = __import__(module_name, fromlist=[attr])
+        
+        # Caso especial: swagger usa run_server func
+        if server_name == "swagger":
+            run_server = getattr(module, attr)
+            run_server()
+            return
+        
         mcp = getattr(module, attr)
         import uvicorn
         from mcp_cli.logging_middleware import RequestLoggingMiddleware
@@ -166,24 +175,30 @@ def main() -> None:
 
     module_name, attr = SERVERS[server_name]
     module = __import__(module_name, fromlist=[attr])
-    mcp = getattr(module, attr)
 
     if use_http:
         port = os.environ.get("FASTMCP_PORT", "8001")
         _setup_logging(server_name)
         logging.info("MCP HTTP en http://%s:%s/mcp", DEFAULT_HTTP_HOST, port)
-        import uvicorn
+        
+        # Caso especial: swagger
+        if server_name == "swagger":
+            run_server = getattr(module, attr)
+            run_server()
+        else:
+            import uvicorn
 
-        from mcp_cli.logging_middleware import RequestLoggingMiddleware
+            from mcp_cli.logging_middleware import RequestLoggingMiddleware
 
-        app = mcp.streamable_http_app()
-        app = RequestLoggingMiddleware(app, server_name=server_name)
-        uvicorn.run(
-            app,
-            host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
-            port=int(port),
-            log_level="warning",
-        )
+            mcp = getattr(module, attr)
+            app = mcp.streamable_http_app()
+            app = RequestLoggingMiddleware(app, server_name=server_name)
+            uvicorn.run(
+                app,
+                host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
+                port=int(port),
+                log_level="warning",
+            )
     else:
         mcp.run(transport="stdio")
 
