@@ -1,11 +1,9 @@
 """Swagger UI documentation server for all MCP servers."""
 
 import os
-from pathlib import Path
 
 from fastapi import FastAPI
 from mcp_swagger_ui import mount_mcp_docs
-from starlette.routing import Mount
 import uvicorn
 
 # Import all MCP servers for documentation
