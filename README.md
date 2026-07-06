@@ -54,6 +54,20 @@ poetry run mcp all --http
 - **stdio** (por defecto): para Cursor, Claude Desktop, etc.
 - **HTTP** (`--http`): servidor en `http://0.0.0.0:8001/mcp` para que el agente aia se conecte por red.
 
+## Swagger UI (documentación de APIs)
+
+```bash
+poetry run mcp-swagger           # puerto 8010
+# o
+poetry run mcp swagger --http
+```
+
+Accede a: http://localhost:8010/
+
+Cada servidor tiene su documentación:
+- /temperatura, /wahapedia, /monitor, /shell
+- /airbnb, /charts, /email, /mangadex
+
 ## Conectar con el agente (Cursor / amanda-IA)
 
 Configura el servidor MCP en Cursor o en el agente aia. Ejemplo para `~/.cursor/mcp.json`:
