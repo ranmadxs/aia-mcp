@@ -1,0 +1,53 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# aia-mcp — docker-compose
+# Levanta todos los servidores MCP en modo HTTP (paralelo).
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  aia-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aia-mcp:latest
+    container_name: aia-mcp
+    restart: unless-stopped
+
+    # Carga variables desde .env (ver .env.example)
+    env_file:
+      - .env
+
+    # Sobrescribe/agrega variables si es necesario
+    environment:
+      FASTMCP_HOST: "0.0.0.0"
+      FASTMCP_LOG_LEVEL: "INFO"
+
+    ports:
+      - "8001:8001"   # temperatura
+      - "8002:8002"   # wahapedia
+      - "8003:8003"   # monitor
+      - "8005:8005"   # shell
+      - "8006:8006"   # airbnb
+      - "8007:8007"   # charts
+      - "8008:8008"   # email
+      - "8009:8009"   # mangadex
+      - "8010:8010"   # swagger
+      - "7408:7408"   # mcp-ssh
+
+    volumes:
+      # Logs rotados por día: logs/{servidor}_{fecha}.log
+      - ./logs:/app/logs
+      # Cache de wahapedia y descargas de mangadex
+      - ./.aia:/app/.aia
+      # SSH del host: provee la key id_ed25519 FUERA del contenedor (readonly).
+      # La config de mcp-ssh usa key = "~/.ssh/id_ed25519" (tilde = HOME del contenedor).
+      - ${HOME:-/home/ranmadxs}/.ssh:/root/.ssh:ro
+
+    # Healthcheck: consulta el endpoint /mcp de temperatura
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/mcp', timeout=3) else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    command: ["all", "--http"]
