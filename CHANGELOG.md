@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.2] — 2026-07-12
+
+### Arreglado
+- `docker-image.yml`: corregida indentación del paso "Build & Push to Docker Hub" (`uses`/`with`/`env` a 8 espacios bajo el `- name:`). El YAML inválido hacía que GitHub ignorara el workflow y solo corriera el de poetry.
+
+---
+
 ## [v1.2.1] — 2026-07-12
 
 ### Arreglado
