@@ -5,6 +5,23 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.0] — 2026-07-12
+
+### Cambiado
+- Optimización del Dockerfile (build ~3-5x más rápido):
+  - Dependencias Python instaladas vía `pip install` desde `requirements.txt` exportado con `poetry export` (en lugar de `poetry install`, que resuelve lento)
+  - Reorden de capas: `pyproject.toml` + `poetry.lock` se copian ANTES del código fuente, así la capa de dependencias queda cacheada y solo se reconstruye si cambian las deps
+  - `COPY` del código fuente movido DESPUÉS de instalar dependencias
+
+---
+
+## [v1.1.9] — 2026-07-12
+
+### Cambiado
+- Actions subidas a v4/v5 (evita warning de deprecación de Node 20 en runners)
+
+---
+
 ## [v1.1.8] — 2026-07-12
 
 ### Cambiado

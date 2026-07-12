@@ -38,8 +38,17 @@ RUN set -eux; \
 
 WORKDIR /app
 
-# Copia primero los metadatos para aprovechar la cache de capas
-COPY pyproject.toml README.md ./
+# ── Dependencias Python (capa cacheable) ─────────────────────────────────────
+# Se copia SOLO pyproject.toml + poetry.lock ANTES del código fuente, así la
+# capa de dependencias solo se reconstruye si cambian las deps, no el código.
+# Se exporta a requirements.txt y se instala con pip (3-5x más rápido que
+# `poetry install`, que resuelve lento).
+COPY pyproject.toml poetry.lock ./
+RUN poetry export -f requirements.txt --without-hashes --with dev -o /tmp/requirements.txt 2>/dev/null \
+    || poetry export -f requirements.txt --without-hashes -o /tmp/requirements.txt \
+    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm -f /tmp/requirements.txt
+# ── Código fuente (capa NO cacheable, va DESPUÉS de las deps) ───────
 COPY mcp_cli ./mcp_cli
 COPY temperatura ./temperatura
 COPY wahapedia ./wahapedia
@@ -50,14 +59,8 @@ COPY charts ./charts
 COPY mcp_email ./mcp_email
 COPY mangadex ./mangadex
 COPY swagger ./swagger
-
-# Instala dependencias (incluye grupo dev para mcp-swagger-ui)
-RUN poetry install --no-root --with dev 2>&1 \
-    || poetry install --no-root 2>&1
-
 # Instala el paquete propio (registra el entry point `mcp`).
-# Se mantiene el grupo dev (mcp-swagger-ui) requerido por el servidor swagger.
-RUN poetry install 2>&1 || true
+RUN pip install --no-cache-dir . 2>&1 || true
 
 # ── Instala drawio-mcp-server (npm) ───────────────────────────────────────────
 # Expone MCP Streamable HTTP en :3000 y WebSocket de extensión en :3333.
