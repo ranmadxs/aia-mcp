@@ -65,7 +65,6 @@ COPY charts ./charts
 COPY mcp_email ./mcp_email
 COPY mangadex ./mangadex
 COPY swagger ./swagger
-COPY specs ./specs
 
 # Instala dependencias (incluye grupo dev para mcp-swagger-ui)
 RUN poetry install --no-root --with dev 2>&1 \
