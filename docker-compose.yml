@@ -9,9 +9,12 @@ services:
     container_name: aia-mcp
     restart: unless-stopped
 
-    # Carga variables desde .env (ver .env.example)
+    # Carga variables desde .env si existe (ver .env.example).
+    # `required: false` para que el despliegue no falle si no hay .env
+    # (el Dockerfile ya define valores por defecto vía ENV).
     env_file:
-      - .env
+      - path: .env
+        required: false
 
     # Sobrescribe/agrega variables si es necesario
     environment:

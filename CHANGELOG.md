@@ -5,6 +5,21 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.4] — 2026-07-12
+
+### Arreglado
+- `docker-image.yml`: `check-nara` ahora tiene `permissions: actions: read` para que el `GITHUB_TOKEN` pueda consultar el estado del runner nara (antes devolvía vacío y reportaba "nara NO disponible" aunque estaba online)
+- `docker-compose.yml`: `env_file` ahora es `required: false`, así el despliegue no falla si no existe `.env` en nara (el Dockerfile ya define defaults vía ENV)
+
+---
+
+## [v1.2.3] — 2026-07-12
+
+### Arreglado
+- `docker-image.yml`: `check-nara` ahora publica output `online=true|false` en lugar de hacer `exit 1` con `continue-on-error`. Antes, el `exit 1` se trataba como success para `needs`, así que `deploy-nara` corría igual y fallaba aunque nara estuviera offline. Ahora `deploy-nara` se skipea limpio (run queda verde) cuando nara no está disponible.
+
+---
+
 ## [v1.2.2] — 2026-07-12
 
 ### Arreglado

@@ -48,16 +48,20 @@ jobs:
           IMAGE_NAME: "keitarodxs/aia-mcp"
 
   # ── ¿Está nara online? (corre en los runners de GitHub) ────────────────────
-  # Si nara no está online, el job hace exit 1 (con continue-on-error el run
-  # no falla) y el job deploy-nara se skipea por el needs. Si está online,
-  # el job termina OK y deploy-nara corre en el self-hosted runner.
+  # Consulta el estado del runner self-hosted `nara`. Publica un output
+  # `online=true|false` (no usa exit 1, así el run queda verde aunque nara
+  # esté offline). deploy-nara se skipea limpio si online != 'true'.
   check-nara:
     needs: build
     runs-on: ubuntu-latest
-    continue-on-error: true
+    permissions:
+      actions: read
+    outputs:
+      online: ${{ steps.estado.outputs.online }}
     steps:
       - uses: actions/checkout@v4
       - name: Consultar estado del runner nara
+        id: estado
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -65,19 +69,20 @@ jobs:
             --jq '.runners[] | select(.name=="nara") | .status' 2>/dev/null || echo "")
           if [ "$ONLINE" = "online" ]; then
             echo "nara ONLINE -> se desplegará"
+            echo "online=true" >> "$GITHUB_OUTPUT"
           else
             echo "nara NO disponible -> se omite el despliegue"
-            exit 1
+            echo "online=false" >> "$GITHUB_OUTPUT"
           fi
 
   # ── Despliegue continuo en nara (best-effort) ───────────────────────────────
   # Corre DIRECTAMENTE en el self-hosted runner `nara` (sin SSH). El build de la
   # imagen ocurre arriba en los runners de GitHub; aquí solo se hace pull y up
-  # de la imagen ya publicada usando docker compose. Solo corre si check-nara
-  # terminó OK (nara online).
+  # de la imagen ya publicada usando docker compose. Solo corre si nara está
+  # online (output del job check-nara).
   deploy-nara:
     needs: check-nara
-    if: needs.check-nara.result == 'success'
+    if: needs.check-nara.outputs.online == 'true'
     runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
