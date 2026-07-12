@@ -11,19 +11,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     POETRY_VERSION=1.8.3 \
     POETRY_VIRTUALENVS_CREATE=false \
-    POETRY_NO_INTERACTION=1 \
-    GO_VERSION=1.23.4
+    POETRY_NO_INTERACTION=1
 
 # Dependencias del sistema:
 # - build-essential / gcc: compilación de paquetes con extensiones C (pymongo, etc.)
-# - git: requerido por el servidor "shell", mangadex-downloader y go install
-# - ca-certificates / curl / wget: descarga del toolchain de Go
+# - git: requerido por el servidor "shell" y mangadex-downloader
+# - ca-certificates / curl: descargas varias
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         gcc \
         git \
         curl \
-        wget \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
@@ -37,18 +35,6 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*; \
     node --version; npm --version
-
-# ── Instala Go (prerequisito para compilar mcp-ssh) ───────────────────────────
-# Se descarga el toolchain oficial de golang.org para linux/amd64.
-RUN set -eux; \
-    arch=$(dpkg --print-architecture); \
-    wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" -O /tmp/go.tgz; \
-    tar -C /usr/local -xzf /tmp/go.tgz; \
-    rm -f /tmp/go.tgz; \
-    /usr/local/go/bin/go version
-ENV PATH="/usr/local/go/bin:${PATH}" \
-    GOPATH="/root/go" \
-    GOBIN="/usr/local/bin"
 
 WORKDIR /app
 
@@ -72,17 +58,6 @@ RUN poetry install --no-root --with dev 2>&1 \
 # Instala el paquete propio (registra el entry point `mcp`).
 # Se mantiene el grupo dev (mcp-swagger-ui) requerido por el servidor swagger.
 RUN poetry install 2>&1 || true
-
-# ── Instala mcp-ssh (binario Go) ──────────────────────────────────────────────
-# Compila desde fuente con go install. El binario queda en GOBIN (/usr/local/bin).
-# Requiere Go (instalado arriba) y git (para clonar el módulo).
-RUN go install github.com/xiongjiwei/mcp-ssh@latest \
-    && mcp-ssh --help >/dev/null 2>&1 || true
-
-# Configuración de mcp-ssh: se copia la del repo (resources/mcp-ssh/config.toml,
-# con el whitelist editado) al path que espera el binario en runtime.
-COPY resources/mcp-ssh/config.toml /root/.mcp-ssh/config.toml
-RUN mkdir -p /root/.mcp-ssh && chmod 644 /root/.mcp-ssh/config.toml
 
 # ── Instala drawio-mcp-server (npm) ───────────────────────────────────────────
 # Expone MCP Streamable HTTP en :3000 y WebSocket de extensión en :3333.
@@ -135,19 +110,17 @@ VOLUME ["/app/logs", "/app/.aia"]
 # ── Puertos expuestos ─────────────────────────────────────────────────────────
 # temperatura 8001 | wahapedia 8002 | monitor 8003 | shell 8005
 # airbnb 8006 | charts 8007 | email 8008 | mangadex 8009 | swagger 8010
-# mcp-ssh 7408 | drawio-mcp 3000 (HTTP) + 3333 (WS extensión)
-EXPOSE 8001 8002 8003 8005 8006 8007 8008 8009 8010 7408 3000 3333
+# drawio-mcp 3000 (HTTP) + 3333 (WS extensión)
+EXPOSE 8001 8002 8003 8005 8006 8007 8008 8009 8010 3000 3333
 
-# Script de arranque: levanta mcp-ssh + drawio-mcp (background) + MCPs (foreground).
+# Script de arranque: levanta drawio-mcp (background) + MCPs (foreground).
 RUN printf '#!/bin/sh\nset -e\n' > /app/start.sh \
-    && printf 'echo "[start] mcp-ssh en background (puerto 7408)..."\n' >> /app/start.sh \
-    && printf 'mcp-ssh serve --addr 0.0.0.0:7408 >/app/logs/mcp-ssh.log 2>&1 &\n' >> /app/start.sh \
     && printf 'echo "[start] drawio-mcp-server en background (HTTP :3000 / WS :3333)..."\n' >> /app/start.sh \
     && printf 'nohup drawio-mcp-server --host 0.0.0.0 --extension-port 3333 --http-port 3000 --transport http >/tmp/drawio-mcp.log 2>&1 &\n' >> /app/start.sh \
     && printf 'echo "[start] MCPs aia-mcp (all --http)..."\n' >> /app/start.sh \
     && printf 'exec mcp all --http\n' >> /app/start.sh \
     && chmod +x /app/start.sh
 
-# Entry point: levanta mcp-ssh + TODOS los servidores MCP en modo HTTP (paralelo)
+# Entry point: levanta TODOS los servidores MCP en modo HTTP (paralelo)
 # Para un solo servidor MCP: docker run ... aia-mcp mcp temperatura --http
 ENTRYPOINT ["/app/start.sh"]

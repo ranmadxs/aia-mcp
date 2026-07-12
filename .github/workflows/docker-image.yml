@@ -31,3 +31,48 @@ jobs:
           BUILDX: "true"
           PLATFORMS: "linux/amd64"
           IMAGE_NAME: "keitarodxs/aia-mcp"
+
+  # ── ¿Está nara online? (corre en los runners de GitHub) ────────────────────
+  # Decide si encolar el despliegue. Si nara no está online, el job de deploy
+  # ni se encola (no se queda colgado esperando).
+  check-nara:
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      online: ${{ steps.nara.outputs.online }}
+    steps:
+      - name: Set docker tag version
+        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
+      - name: Consultar estado del runner nara
+        id: nara
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ONLINE=$(gh api repos/${{ github.repository }}/actions/runners \
+            --jq '.runners[] | select(.name=="nara") | .status' 2>/dev/null || echo "")
+          if [ "$ONLINE" = "online" ]; then
+            echo "online=true" >> "$GITHUB_OUTPUT"
+            echo "nara ONLINE -> se desplegará"
+          else
+            echo "online=false" >> "$GITHUB_OUTPUT"
+            echo "nara NO disponible -> se omite el despliegue"
+          fi
+
+  # ── Despliegue continuo en nara (best-effort) ───────────────────────────────
+  # Corre DIRECTAMENTE en el self-hosted runner `nara` (sin SSH). El build de la
+  # imagen ocurre arriba en los runners de GitHub; aquí solo se hace pull y up
+  # de la imagen ya publicada usando docker compose. Solo se encola si nara está
+  # online.
+  deploy-nara:
+    needs: check-nara
+    if: needs.check-nara.outputs.online == 'true'
+    runs-on: self-hosted
+    steps:
+      - name: Checkout (tiene el docker-compose.yml)
+        uses: actions/checkout@v3
+      - name: Desplegar con docker compose en nara
+        run: |
+          set -e
+          docker compose pull aia-mcp
+          docker compose up -d aia-mcp
+          echo "Despliegue en nara completado"

@@ -5,10 +5,7 @@
 
 services:
   aia-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: aia-mcp:latest
+    image: keitarodxs/aia-mcp:latest
     container_name: aia-mcp
     restart: unless-stopped
 
@@ -31,16 +28,14 @@ services:
       - "8008:8008"   # email
       - "8009:8009"   # mangadex
       - "8010:8010"   # swagger
-      - "7408:7408"   # mcp-ssh
+      - "3000:3000"   # drawio-mcp (HTTP)
+      - "3333:3333"   # drawio-mcp (WS extensión)
 
     volumes:
       # Logs rotados por día: logs/{servidor}_{fecha}.log
       - ./logs:/app/logs
       # Cache de wahapedia y descargas de mangadex
       - ./.aia:/app/.aia
-      # SSH del host: provee la key id_ed25519 FUERA del contenedor (readonly).
-      # La config de mcp-ssh usa key = "~/.ssh/id_ed25519" (tilde = HOME del contenedor).
-      - ${HOME:-/home/ranmadxs}/.ssh:/root/.ssh:ro
 
     # Healthcheck: consulta el endpoint /mcp de temperatura
     healthcheck:
