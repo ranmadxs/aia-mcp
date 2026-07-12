@@ -30,6 +30,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Instala Poetry (gestor de dependencias del proyecto)
 RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 
+# ── Instala Node.js + npm (prerequisito para drawio-mcp-server) ───────────────
+# Usa NodeSource para tener una versión reciente de Node en Debian/Ubuntu slim.
+RUN set -eux; \
+    arch=$(dpkg --print-architecture); \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
+    apt-get install -y --no-install-recommends nodejs; \
+    rm -rf /var/lib/apt/lists/*; \
+    node --version; npm --version
+
 # ── Instala Go (prerequisito para compilar mcp-ssh) ───────────────────────────
 # Se descarga el toolchain oficial de golang.org para linux/amd64.
 RUN set -eux; \
@@ -76,6 +85,11 @@ RUN go install github.com/xiongjiwei/mcp-ssh@latest \
 COPY resources/mcp-ssh/config.toml /root/.mcp-ssh/config.toml
 RUN mkdir -p /root/.mcp-ssh && chmod 644 /root/.mcp-ssh/config.toml
 
+# ── Instala drawio-mcp-server (npm) ───────────────────────────────────────────
+# Expone MCP Streamable HTTP en :3000 y WebSocket de extensión en :3333.
+RUN npm install -g drawio-mcp-server@latest \
+    && drawio-mcp-server --help >/dev/null 2>&1 || true
+
 # ── Variables de entorno por defecto ──────────────────────────────────────────
 # Host de FastMCP (0.0.0.0 para escuchar dentro del contenedor)
 ENV FASTMCP_HOST=0.0.0.0 \
@@ -121,13 +135,15 @@ VOLUME ["/app/logs", "/app/.aia"]
 # ── Puertos expuestos ─────────────────────────────────────────────────────────
 # temperatura 8001 | wahapedia 8002 | monitor 8003 | shell 8005
 # airbnb 8006 | charts 8007 | email 8008 | mangadex 8009 | swagger 8010
-# mcp-ssh 7408
-EXPOSE 8001 8002 8003 8005 8006 8007 8008 8009 8010 7408
+# mcp-ssh 7408 | drawio-mcp 3000 (HTTP) + 3333 (WS extensión)
+EXPOSE 8001 8002 8003 8005 8006 8007 8008 8009 8010 7408 3000 3333
 
-# Script de arranque: levanta mcp-ssh (background) + todos los MCPs (foreground).
+# Script de arranque: levanta mcp-ssh + drawio-mcp (background) + MCPs (foreground).
 RUN printf '#!/bin/sh\nset -e\n' > /app/start.sh \
     && printf 'echo "[start] mcp-ssh en background (puerto 7408)..."\n' >> /app/start.sh \
     && printf 'mcp-ssh serve --addr 0.0.0.0:7408 >/app/logs/mcp-ssh.log 2>&1 &\n' >> /app/start.sh \
+    && printf 'echo "[start] drawio-mcp-server en background (HTTP :3000 / WS :3333)..."\n' >> /app/start.sh \
+    && printf 'nohup drawio-mcp-server --host 0.0.0.0 --extension-port 3333 --http-port 3000 --transport http >/tmp/drawio-mcp.log 2>&1 &\n' >> /app/start.sh \
     && printf 'echo "[start] MCPs aia-mcp (all --http)..."\n' >> /app/start.sh \
     && printf 'exec mcp all --http\n' >> /app/start.sh \
     && chmod +x /app/start.sh
