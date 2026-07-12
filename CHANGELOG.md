@@ -5,6 +5,45 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.1.6] — 2026-07-12
+
+### Agregado
+- Tests unitarios (`pytest`) para `wahapedia` (slug/normalización/facciones) y `airbnb` (serialización MongoDB / formato iCal)
+- Job `test` en CI que corre `poetry run pytest` antes del build de Docker
+
+### Cambiado
+- `docker-compose.yml` apunta a `keitarodxs/aia-mcp:latest` (sin build local); agrega puertos 3000/3333 de drawio-mcp; quita puerto 7408 (mcp-ssh) y volumen SSH
+
+---
+
+## [v1.1.5] — 2026-07-12
+
+### Cambiado
+- Eliminado `mcp-ssh` y el toolchain de Go de la imagen Docker (ya no requerido)
+- Build de Docker restringido a `linux/amd64` (compatible con `nara`)
+- `poetry install` conserva el grupo dev (`mcp-swagger-ui`) requerido por el servidor swagger
+- `drawio-mcp-server` fijado a versión `2.2.0`
+
+---
+
+## [v1.1.0] — 2026-07-12
+
+### Agregado
+- Workflows de GitHub Actions: `docker-image.yml` (publica `keitarodxs/aia-mcp` en Docker Hub) y `python-publish.yml` (publica el paquete en PyPI)
+- `drawio-mcp-server` (npm) instalado en la imagen; expone HTTP `:3000` + WS `:3333`
+- `Node.js 20` en la imagen (prerrequisito de drawio-mcp-server)
+
+---
+
+## [v1.0.0] — 2026-03-22
+
+### Agregado
+- Primera versión estable con los servidores: temperatura, wahapedia, monitor, shell, airbnb, charts, email, mangadex, swagger
+- CLI `mcp` con `all --http` y puertos por servidor
+- Variables de entorno y `.env.example`
+
+---
+
 ## [v0.4.1-aia] --- 2026-03-22
 
 ### Agregado

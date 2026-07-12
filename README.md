@@ -2,29 +2,32 @@
 
 Servidor MCP (Model Context Protocol) que expone herramientas para el agente **aia** del proyecto hermano [amanda-IA](https://github.com/your-org/amanda-IA).
 
+`aia-mcp` agrupa varios servidores MCP independientes (temperatura, Warhammer 40K, monitor de estanque, shell, Airbnb, charts, email, MangaDex, swagger) que el agente aia consume vía stdio o HTTP.
+
 ## Estructura
 
 ```
 aia-mcp/
 ├── README.md
 ├── pyproject.toml
-├── mcp_cli/           # CLI para ejecutar servidores
-├── specs/
-│   └── SPEC_TEMPERATURA.md
-├── temperatura/       # get_temperature (ciudades)
-│   ├── __init__.py
-│   └── server.py
-└── monitor/           # medición, historial_mediciones
-    ├── __init__.py
-    └── server.py
+├── Dockerfile                 # imagen keitarodxs/aia-mcp
+├── docker-compose.yml         # despliegue en nara
+├── mcp_cli/                   # CLI (entry point `mcp`) y registro de servidores
+├── specs/                     # especificaciones (ej. SPEC_TEMPERATURA.md)
+├── temperatura/  wahapedia/  monitor/  shell/  airbnb/
+├── charts/  mcp_email/  mangadex/  swagger/
+├── resources/mcp-ssh/         # config de mcp-ssh (no usado en la imagen)
+└── tests/                     # tests unitarios (pytest)
 ```
 
-Cada servidor MCP vive en su propio directorio. Ejecuta cualquiera con `poetry run mcp <servidor>`.
+Cada servidor MCP vive en su propio directorio y se registra en `mcp_cli/cli.py`
+(diccionario `SERVERS`). Ejecuta cualquiera con `poetry run mcp <servidor>`.
 
 ## Requisitos
 
 - Python 3.11+
 - [Poetry](https://python-poetry.org/)
+- (Opcional, para despliegue) Docker + un host con el self-hosted runner registrado
 
 ## Instalación
 
@@ -40,19 +43,28 @@ Desde el directorio `aia-mcp/`:
 ```bash
 poetry run mcp                    # temperatura (por defecto, stdio)
 poetry run mcp temperatura        # explícito
-poetry run mcp monitor            # acumulador/estanque (litros, %, velocidad)
 poetry run mcp --list             # listar servidores disponibles
 
-# Modo HTTP (para conexión remota)
+# Modo HTTP (para conexión remota / agente aia por red)
 poetry run mcp temperatura --http   # puerto 8001
-poetry run mcp monitor --http     # puerto 8003
-
-# Levantar todos los servidores
-poetry run mcp all --http
+poetry run mcp all --http           # todos los servidores en paralelo
 ```
 
 - **stdio** (por defecto): para Cursor, Claude Desktop, etc.
-- **HTTP** (`--http`): servidor en `http://0.0.0.0:8001/mcp` para que el agente aia se conecte por red.
+- **HTTP** (`--http`): servidor en `http://0.0.0.0:<puerto>/mcp`.
+
+### Puertos por servidor
+
+| Servidor     | Puerto | Servidor   | Puerto |
+|--------------|--------|------------|--------|
+| temperatura  | 8001   | airbnb     | 8006   |
+| wahapedia    | 8002   | charts     | 8007   |
+| monitor      | 8003   | email      | 8008   |
+| shell        | 8005   | mangadex   | 8009   |
+| swagger      | 8010   | drawio-mcp | 3000/3333 |
+
+> `drawio-mcp-server` se instala dentro de la imagen Docker (no es un servidor
+> MCP de este repo) y expone HTTP en `:3000` + WebSocket de extensión en `:3333`.
 
 ## Swagger UI (documentación de APIs)
 
@@ -63,10 +75,6 @@ poetry run mcp swagger --http
 ```
 
 Accede a: http://localhost:8010/
-
-Cada servidor tiene su documentación:
-- /temperatura, /wahapedia, /monitor, /shell
-- /airbnb, /charts, /email, /mangadex
 
 ## Conectar con el agente (Cursor / amanda-IA)
 
@@ -94,34 +102,78 @@ Ajusta `cwd` a la ruta absoluta de tu proyecto `aia-mcp`.
    MCP_URL=http://localhost:8001/mcp poetry run aia
    ```
 
-**Añadir nuevos servidores:** crea el directorio (ej. `nuevo_servidor/`), implementa el servidor con FastMCP, y regístralo en `mcp_cli/cli.py` en el diccionario `SERVERS`.
+**Añadir nuevos servidores:** crea el directorio (ej. `nuevo_servidor/`), implementa
+el servidor con FastMCP, y regístralo en `mcp_cli/cli.py` en el diccionario `SERVERS`
+(sumando su puerto en `SERVER_PORTS`).
+
+## Despliegue (Docker)
+
+El repo publica automáticamente la imagen `keitarodxs/aia-mcp` en Docker Hub al
+pushear un tag `v*.*.*` (workflow `.github/workflows/docker-image.yml`).
+
+### Local / servidor con Docker
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Esto levanta el contenedor `aia-mcp` con todos los puertos mapeados y los volúmenes
+`logs/` y `.aia/` montados. Carga las variables desde `.env` (ver `.env.example`).
+
+## Tests
+
+```bash
+poetry install --with dev
+poetry run pytest
+```
+
+Cobertura actual: `wahapedia` (slug/normalización/facciones) y `airbnb`
+(serialización MongoDB / formato iCal).
 
 ## Tools disponibles
 
-### get_temperature
+### temperatura — `get_temperature`
 
 Obtiene la temperatura actual de una ciudad (valores simulados).
 
-- **Parámetro:** `city` (string, opcional) — Nombre de la ciudad
+- **Parámetro:** `city` (string, opcional)
 - **Retorno:** String con la temperatura
 
 Ciudades soportadas: Santiago, Buenos Aires, Lima, Bogotá, Madrid, New York, Londres, Tokio.
 
-### Monitor (acumulador / estanque)
+### monitor — estanque / acumulador
 
-- **get_lectura_actual()**: Obtiene litros y porcentaje del acumulador en tiempo real. Usa MQTT (`MQTT_HOST`, `MQTT_TOPIC_OUT`) o `TINAJA_ESTADO_URL` como fallback. Si no hay datos, devuelve un cálculo de ejemplo.
-- **calculate_tinaja_level(distance)**: Calcula litros y porcentaje desde la distancia del sensor (cm).
-- **get_tinaja_config()**: Configuración del estanque y estado MQTT.
-- **get_velocidad_disminucion_agua(db_name, horas_atras)**: Calcula la velocidad de disminución del agua (L/h) usando el historial en MongoDB (`tomi-db.estanque-historial`). Requiere `MONGODB_URI` en `.env`.
+- **get_lectura_actual()**: litros y porcentaje en tiempo real vía MQTT (`MQTT_HOST`,
+  `MQTT_TOPIC_OUT`) o `TINAJA_ESTADO_URL` como fallback.
+- **calculate_tinaja_level(distance)**: litros/% desde la distancia del sensor (cm).
+- **get_tinaja_config()**: configuración del estanque y estado MQTT.
+- **get_velocidad_disminucion_agua(db_name, horas_atras)**: velocidad de bajada (L/h)
+  usando historial en MongoDB. Requiere `MONGODB_URI`.
 
-Variables en `.env`: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC_OUT`. Fallback HTTP: `TINAJA_ESTADO_URL`. Para velocidad: `MONGODB_URI`.
+Variables `.env`: `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`,
+`MQTT_TOPIC_OUT`, `TINAJA_ESTADO_URL`, `MONGODB_URI`.
 
-### Wahapedia (Warhammer 40K)
+### wahapedia — Warhammer 40K
 
-- **get_unit_stats(query, faction)**: Estadísticas de una unidad.
-- **search_wahapedia(query)**: Búsqueda en español.
-- **get_factions()**: Lista todas las facciones.
-- **get_units(faction)**: Unidades de una facción.
-- **get_stratagems(faction)**: Estratagemas de una facción.
+- **get_unit_stats(query, faction)** / **search_wahapedia(query)**
+- **get_factions()** / **get_units(faction)** / **get_stratagems(faction)**
 
-Cache: config por variables de entorno (`WAHAPEDIA_CACHE_ENABLED`, `WAHAPEDIA_CACHE_DIR`, `WAHAPEDIA_CACHE_TTL_DAYS`). Por defecto deshabilitado. Si habilitas, guarda en `.aia/cache/wahapedia/` y TTL de 60 días.
+Cache en disco configurable: `WAHAPEDIA_CACHE_ENABLED`, `WAHAPEDIA_CACHE_DIR`,
+`WAHAPEDIA_CACHE_TTL_DAYS` (por defecto deshabilitada; TTL 60 días).
+
+### airbnb — reservas y calendario (MongoDB)
+
+- **get_proxima_reserva()**, **get_reservas_futuras(solo_futuras)**,
+  **get_calendario_mes_airbnb(mes, anio)**, **get_ingresos_mes(mes, anio)**
+
+Requiere `MONGODB_URI` y `AIRBNB_DB`.
+
+### charts / email / mangadex / shell / swagger
+
+- **charts**: genera gráficos (matplotlib) desde datos de MongoDB.
+- **email**: consulta correo IMAP Yahoo (`YAHOO_EMAIL`, `YAHOO_APP_PASSWORD`).
+- **mangadex**: descarga/consulta mangas (`AIA_MANGA_DIR`).
+- **shell**: `run_command(command, cwd)` para ejecutar comandos desde el agente.
+- **swagger**: UI de documentación de APIs en `:8010`.
+
