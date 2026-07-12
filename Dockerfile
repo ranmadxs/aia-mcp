@@ -33,7 +33,6 @@ RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
 # ── Instala Node.js + npm (prerequisito para drawio-mcp-server) ───────────────
 # Usa NodeSource para tener una versión reciente de Node en Debian/Ubuntu slim.
 RUN set -eux; \
-    arch=$(dpkg --print-architecture); \
     curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
     apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*; \
@@ -42,7 +41,7 @@ RUN set -eux; \
 # ── Instala Go (prerequisito para compilar mcp-ssh) ───────────────────────────
 # Se descarga el toolchain oficial de golang.org para linux/amd64.
 RUN set -eux; \
-    arch=$(dpkg --print-architecture | sed 's/arm64/aarch64/'); \
+    arch=$(dpkg --print-architecture); \
     wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" -O /tmp/go.tgz; \
     tar -C /usr/local -xzf /tmp/go.tgz; \
     rm -f /tmp/go.tgz; \
@@ -70,8 +69,9 @@ COPY swagger ./swagger
 RUN poetry install --no-root --with dev 2>&1 \
     || poetry install --no-root 2>&1
 
-# Instala el paquete propio (registra el entry point `mcp`)
-RUN poetry install --no-dev 2>&1 || true
+# Instala el paquete propio (registra el entry point `mcp`).
+# Se mantiene el grupo dev (mcp-swagger-ui) requerido por el servidor swagger.
+RUN poetry install 2>&1 || true
 
 # ── Instala mcp-ssh (binario Go) ──────────────────────────────────────────────
 # Compila desde fuente con go install. El binario queda en GOBIN (/usr/local/bin).
@@ -86,7 +86,8 @@ RUN mkdir -p /root/.mcp-ssh && chmod 644 /root/.mcp-ssh/config.toml
 
 # ── Instala drawio-mcp-server (npm) ───────────────────────────────────────────
 # Expone MCP Streamable HTTP en :3000 y WebSocket de extensión en :3333.
-RUN npm install -g drawio-mcp-server@latest \
+# Versión fijada para evitar sorpresas con @latest.
+RUN npm install -g drawio-mcp-server@2.2.0 \
     && drawio-mcp-server --help >/dev/null 2>&1 || true
 
 # ── Variables de entorno por defecto ──────────────────────────────────────────

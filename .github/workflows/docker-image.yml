@@ -29,4 +29,5 @@ jobs:
           PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
           #TAG_NAME: ${{ env.RELEASE_VERSION }}
           BUILDX: "true"
+          PLATFORMS: "linux/amd64"
           IMAGE_NAME: "keitarodxs/aia-mcp"
