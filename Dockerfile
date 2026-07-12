@@ -42,7 +42,7 @@ RUN set -eux; \
 # ── Instala Go (prerequisito para compilar mcp-ssh) ───────────────────────────
 # Se descarga el toolchain oficial de golang.org para linux/amd64.
 RUN set -eux; \
-    arch=$(dpkg --print-architecture | sed 's/amd64/x86_64/;s/arm64/aarch64/'); \
+    arch=$(dpkg --print-architecture | sed 's/arm64/aarch64/'); \
     wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" -O /tmp/go.tgz; \
     tar -C /usr/local -xzf /tmp/go.tgz; \
     rm -f /tmp/go.tgz; \
