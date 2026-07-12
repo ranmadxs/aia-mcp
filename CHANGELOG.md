@@ -5,6 +5,14 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.1] — 2026-07-12
+
+### Arreglado
+- `docker-image.yml`: corregida indentación inválida en el job `build` (rompía el parseo del workflow)
+- `docker-image.yml`: `TAG_NAME` restaurado usando `github.ref_name` para que la imagen se publique con el tag del release (ej. `keitarodxs/aia-mcp:v1.2.1`) y no solo `latest`
+
+---
+
 ## [v1.2.0] — 2026-07-12
 
 ### Cambiado
