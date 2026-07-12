@@ -5,6 +5,21 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.1.8] — 2026-07-12
+
+### Cambiado
+- Fix del despliegue best-effort en self-hosted runner: `check-nara` hace `exit 1` si el runner no está online (con `continue-on-error`), y `deploy-nara` usa `if: needs.check-nara.result == 'success'` en lugar de depender de output propagado (frágil)
+
+---
+
+## [v1.1.7] — 2026-07-12
+
+### Cambiado
+- README y CHANGELOG actualizados a la realidad actual del proyecto (servidores, puertos, Docker, tests)
+- Se omite mención a infraestructura local del README/CHANGELOG
+
+---
+
 ## [v1.1.6] — 2026-07-12
 
 ### Agregado
