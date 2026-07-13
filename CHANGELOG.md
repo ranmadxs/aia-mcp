@@ -5,6 +5,20 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.7] — 2026-07-13
+
+### Arreglado
+- `docker-image.yml`: eliminado el job `check-nara`. El `GITHUB_TOKEN` de integración no tiene permiso para leer `/actions/runners` (HTTP 403 "Resource not accessible by integration"), así que siempre reportaba "nara NO disponible" y el despliegue nunca corría aunque nara estuviera online. Ahora `deploy-nara` corre directo en el runner `nara` (`runs-on: [self-hosted, nara]`) con `continue-on-error` + `timeout-minutes: 10`: si nara está up despliega, si está down hace timeout limpio (run queda verde).
+
+---
+
+## [v1.2.6] — 2026-07-12
+
+### Cambiado
+- Dockerfile: base actualizada de `python:3.11-slim` a `python:3.13-slim` (Python más reciente, drop-in sin otros cambios)
+
+---
+
 ## [v1.2.5] — 2026-07-12
 
 ### Diagnóstico

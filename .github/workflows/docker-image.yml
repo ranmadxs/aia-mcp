@@ -47,48 +47,20 @@ jobs:
           PLATFORMS: "linux/amd64"
           IMAGE_NAME: "keitarodxs/aia-mcp"
 
-  # ── ¿Está nara online? (corre en los runners de GitHub) ────────────────────
-  # Consulta el estado del runner self-hosted `nara`. Publica un output
-  # `online=true|false` (no usa exit 1, así el run queda verde aunque nara
-  # esté offline). deploy-nara se skipea limpio si online != 'true'.
-  check-nara:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-    outputs:
-      online: ${{ steps.estado.outputs.online }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Consultar estado del runner nara
-        id: estado
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -x
-          echo "== raw API response =="
-          gh api repos/${{ github.repository }}/actions/runners 2>&1 || true
-          echo "== fin raw =="
-          ONLINE=$(gh api repos/${{ github.repository }}/actions/runners \
-            --jq '.runners[] | select(.name=="nara") | .status' 2>&1 || echo "")
-          echo "ONLINE=[$ONLINE]"
-          if [ "$ONLINE" = "online" ]; then
-            echo "nara ONLINE -> se desplegará"
-            echo "online=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "nara NO disponible -> se omite el despliegue"
-            echo "online=false" >> "$GITHUB_OUTPUT"
-          fi
-
   # ── Despliegue continuo en nara (best-effort) ───────────────────────────────
   # Corre DIRECTAMENTE en el self-hosted runner `nara` (sin SSH). El build de la
   # imagen ocurre arriba en los runners de GitHub; aquí solo se hace pull y up
-  # de la imagen ya publicada usando docker compose. Solo corre si nara está
-  # online (output del job check-nara).
+  # de la imagen ya publicada usando docker compose.
+  #
+  # No consultamos la API de runners (el GITHUB_TOKEN de integración no tiene
+  # permiso para /actions/runners -> 403). En su lugar: el job se asigna al
+  # runner `nara`; si nara está offline el job se queda en cola y alcanza el
+  # timeout (continue-on-error lo deja verde). Si nara está online, despliega.
   deploy-nara:
-    needs: check-nara
-    if: needs.check-nara.outputs.online == 'true'
-    runs-on: self-hosted
+    needs: build
+    runs-on: [self-hosted, nara]
+    continue-on-error: true
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Desplegar con docker compose en nara

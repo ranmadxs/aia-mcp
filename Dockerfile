@@ -3,7 +3,7 @@
 # Servidor MCP (Model Context Protocol) para el agente aia (amanda-IA)
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Evita prompts interactivos y writes .pyc
 ENV PYTHONDONTWRITEBYTECODE=1 \
