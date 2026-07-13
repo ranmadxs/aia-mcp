@@ -40,12 +40,13 @@ services:
       # Cache de wahapedia y descargas de mangadex
       - ./.aia:/app/.aia
 
-    # Healthcheck: consulta el endpoint /mcp de temperatura
+    # Healthcheck: POST initialize MCP al endpoint /mcp de temperatura
+    # (GET plano devuelve 406; el MCP Streamable HTTP requiere headers de protocolo)
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/mcp', timeout=3) else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,json,sys; req=urllib.request.Request('http://127.0.0.1:8001/mcp', data=json.dumps({'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2024-11-05','capabilities':{},'clientInfo':{'name':'hc','version':'1.0'}}}).encode(), headers={'Content-Type':'application/json','Accept':'application/json, text/event-stream'}); sys.exit(0 if urllib.request.urlopen(req, timeout=5).status==200 else 1)"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
 
     command: ["all", "--http"]

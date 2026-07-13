@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.9] — 2026-07-13
+
+### Arreglado
+- `docker-compose.yml`: healthcheck corregido. Antes hacía `GET /mcp` plano y el MCP Streamable HTTP respondía 406, marcando el contenedor `unhealthy` (falso positivo). Ahora hace `POST initialize` con headers MCP válidos y espera 200, así el contenedor queda `healthy` de verdad.
+
+---
+
 ## [v1.2.8] — 2026-07-13
 
 ### Arreglado
