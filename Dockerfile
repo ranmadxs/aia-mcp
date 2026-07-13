@@ -25,8 +25,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Instala Poetry (gestor de dependencias del proyecto)
+# Instala Poetry (gestor de dependencias del proyecto, solo para `poetry export`)
 RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
+
+# Instala uv (instalador de paquetes en Rust, 10-100x más rápido que pip).
+# Se usa para instalar las deps en la imagen; el proyecto sigue gestionado con
+# poetry (pyproject.toml + poetry.lock).
+RUN pip install --no-cache-dir uv
+
+# uv usa el Python del sistema (sin crear venv dentro del contenedor)
+ENV UV_SYSTEM_PYTHON=1 \
+    UV_NO_CACHE=1
 
 # ── Instala Node.js + npm (prerequisito para drawio-mcp-server) ───────────────
 # Usa NodeSource para tener una versión reciente de Node en Debian/Ubuntu slim.
@@ -41,12 +50,12 @@ WORKDIR /app
 # ── Dependencias Python (capa cacheable) ─────────────────────────────────────
 # Se copia SOLO pyproject.toml + poetry.lock ANTES del código fuente, así la
 # capa de dependencias solo se reconstruye si cambian las deps, no el código.
-# Se exporta a requirements.txt y se instala con pip (3-5x más rápido que
-# `poetry install`, que resuelve lento).
+# Se exporta a requirements.txt (respeta poetry.lock) y se instala con `uv pip
+# install --system`, que es 10-100x más rápido que `pip install`.
 COPY pyproject.toml poetry.lock ./
 RUN poetry export -f requirements.txt --without-hashes --with dev -o /tmp/requirements.txt 2>/dev/null \
     || poetry export -f requirements.txt --without-hashes -o /tmp/requirements.txt \
-    && pip install --no-cache-dir -r /tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt
 # ── Código fuente (capa NO cacheable, va DESPUÉS de las deps) ───────
 COPY mcp_cli ./mcp_cli
@@ -60,7 +69,7 @@ COPY mcp_email ./mcp_email
 COPY mangadex ./mangadex
 COPY swagger ./swagger
 # Instala el paquete propio (registra el entry point `mcp`).
-RUN pip install --no-cache-dir . 2>&1 || true
+RUN uv pip install --system . 2>&1 || true
 
 # ── Instala drawio-mcp-server (npm) ───────────────────────────────────────────
 # Expone MCP Streamable HTTP en :3000 y WebSocket de extensión en :3333.

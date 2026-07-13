@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.3.0] — 2026-07-13
+
+### Cambiado
+- Dockerfile: instalación de dependencias migrada de `pip install` a `uv pip install --system` (10-100x más rápido). El proyecto sigue gestionado con poetry (`pyproject.toml` + `poetry.lock`); se usa `poetry export` para generar `requirements.txt` y luego `uv` para instalar. También el paquete propio se instala con `uv pip install --system .`.
+
+---
+
 ## [v1.2.9] — 2026-07-13
 
 ### Arreglado
