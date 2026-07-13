@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.8] — 2026-07-13
+
+### Arreglado
+- `docker-image.yml`: `deploy-nara` usa `runs-on: [self-hosted, nara]`. Para que el runner `nara` coincida, se le agregó la **etiqueta `nara`** (custom) vía API (antes solo tenía `self-hosted, Linux, X64`, y el job se quedaba en cola). Re-trigger del deploy con tag v1.2.8.
+
+---
+
 ## [v1.2.7] — 2026-07-13
 
 ### Arreglado
