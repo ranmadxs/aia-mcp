@@ -121,6 +121,11 @@ docker compose up -d
 Esto levanta el contenedor `aia-mcp` con todos los puertos mapeados y los volúmenes
 `logs/` y `.aia/` montados. Carga las variables desde `.env` (ver `.env.example`).
 
+> **Build de la imagen:** el proyecto se sigue gestionando con Poetry
+> (`pyproject.toml` + `poetry.lock`), pero dentro del `Dockerfile` las dependencias
+> se instalan con [`uv`](https://github.com/astral-sh/uv) (`uv pip install --system`)
+> por velocidad. El `poetry.lock` se respeta vía `poetry export` a `requirements.txt`.
+
 ## Tests
 
 ```bash

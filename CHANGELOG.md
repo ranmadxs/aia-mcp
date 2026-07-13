@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.3.1] — 2026-07-13
+
+### Documentación
+- `README.md`: añadida nota en "Despliegue (Docker)" explicando que la imagen instala deps con `uv` (`uv pip install --system`) mientras el proyecto sigue con Poetry.
+
+---
+
 ## [v1.3.0] — 2026-07-13
 
 ### Cambiado
