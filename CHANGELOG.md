@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.2.5] — 2026-07-12
+
+### Diagnóstico
+- `docker-image.yml`: `check-nara` ahora imprime la respuesta cruda de la API y el valor de `ONLINE` para diagnosticar por qué reporta "nara NO disponible" en el workflow aunque el runner está online localmente
+
+---
+
 ## [v1.2.4] — 2026-07-12
 
 ### Arreglado
