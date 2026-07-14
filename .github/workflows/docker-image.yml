@@ -103,13 +103,13 @@ jobs:
 
   # ── Integration Test en nara (best-effort) ──────────────────────────────────
   # Corre en el runner `nara` tras el deploy. Hace curls HTTP a los servidores
-  # MCP levantados en el contenedor para verificar que responden (initialize +
-  # tools/list sobre /mcp). Best-effort: no bloquea si nara está offline.
+  # MCP levantados en el contenedor para verificar que responden (initialize
+  # sobre /mcp). Best-effort: no bloquea si nara está offline.
   test-nara:
     needs: deploy-nara
     runs-on: [self-hosted, nara]
     continue-on-error: true
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Esperar a que el contenedor y los servidores estén listos
         run: |
@@ -123,7 +123,7 @@ jobs:
             sleep 2
           done
           # Esperar a que el puerto 8001 (temperatura) responda antes de testear
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -fsS -o /dev/null http://127.0.0.1:8001/mcp \
               -X POST \
               -H 'Content-Type: application/json' \
@@ -132,8 +132,12 @@ jobs:
               echo "servidor temperatura (:8001) listo"
               break
             fi
+            if [ "$i" -eq 60 ]; then
+              echo "TIMEOUT esperando temperatura. Logs del contenedor:"
+              docker logs aia-mcp --tail 50 || true
+            fi
             echo "esperando servidor temperatura... ($i)"
-            sleep 3
+            sleep 5
           done
       - name: Test temperatura (8001)
         run: |

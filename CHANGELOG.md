@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.2] — 2026-07-13
+
+### Arreglado
+- CI: `test-nara` aumenta la espera del puerto 8001 a 60 intentos x 5s (300s) y vuelca `docker logs aia-mcp` si hay timeout, para diagnosticar arranque de los servidores MCP.
+
 ## [v1.6.1] — 2026-07-13
 
 ### Arreglado
