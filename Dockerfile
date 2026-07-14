@@ -37,8 +37,10 @@ COPY charts ./charts
 COPY mcp_email ./mcp_email
 COPY mangadex ./mangadex
 COPY swagger ./swagger
-# Instala el paquete propio (registra el entry point `mcp`).
-RUN uv pip install --system . 2>&1 || true
+# Instala el paquete propio (registra el entry point `aia-mcp`).
+# Se usa pip (no uv) para consistencia con la imagen base y evitar fallos
+# silenciosos de build que dejaban el entry point ausente.
+RUN pip install --no-cache-dir .
 
 # ── Variables de entorno por defecto ──────────────────────────────────────────
 # Host de FastMCP (0.0.0.0 para escuchar dentro del contenedor)

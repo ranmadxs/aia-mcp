@@ -130,7 +130,7 @@ Desde el directorio `aia-mcp/`:
 ```bash
 cd aia-mcp
 poetry install
-poetry run mcp temperatura
+poetry run aia-mcp temperatura
 ```
 
 El servidor debe escuchar en stdio para recibir mensajes JSON-RPC del protocolo MCP.

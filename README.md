@@ -41,13 +41,13 @@ poetry install
 Desde el directorio `aia-mcp/`:
 
 ```bash
-poetry run mcp                    # temperatura (por defecto, stdio)
-poetry run mcp temperatura        # explícito
-poetry run mcp --list             # listar servidores disponibles
+poetry run aia-mcp                    # temperatura (por defecto, stdio)
+poetry run aia-mcp temperatura        # explícito
+poetry run aia-mcp --list             # listar servidores disponibles
 
 # Modo HTTP (para conexión remota / agente aia por red)
-poetry run mcp temperatura --http   # puerto 8001
-poetry run mcp all --http           # todos los servidores en paralelo
+poetry run aia-mcp temperatura --http   # puerto 8001
+poetry run aia-mcp all --http           # todos los servidores en paralelo
 ```
 
 - **stdio** (por defecto): para Cursor, Claude Desktop, etc.
@@ -96,7 +96,7 @@ Ajusta `cwd` a la ruta absoluta de tu proyecto `aia-mcp`.
 
 ### Conectar aia por HTTP
 
-1. Inicia el servidor MCP en modo HTTP: `poetry run mcp temperatura --http`
+1. Inicia el servidor MCP en modo HTTP: `poetry run aia-mcp temperatura --http`
 2. En otra terminal, ejecuta el agente con la variable de entorno:
    ```bash
    MCP_URL=http://localhost:8001/mcp poetry run aia

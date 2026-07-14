@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.5] — 2026-07-14
+
+### Arreglado
+- Dockerfile: el paquete propio se instala con `pip install .` (no `uv pip install . || true`). El `|| true` enmascaraba un fallo de instalación que dejaba el entry point `aia-mcp` ausente (`exec: aia-mcp: not found`). Ahora el build falla si no se instala.
+
 ## [v1.6.4] — 2026-07-14
 
 ### Arreglado
