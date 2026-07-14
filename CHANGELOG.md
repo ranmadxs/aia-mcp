@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.8] — 2026-07-14
+
+### Arreglado
+- CI: subidas `upload-artifact`/`download-artifact` a `@v7`/`@v8` (Node 24) para eliminar el warning de deprecación de Node.js 20 en los jobs `build` y `publish`.
+
 ## [v1.6.7] — 2026-07-14
 
 ### Arreglado
