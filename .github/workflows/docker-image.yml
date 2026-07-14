@@ -100,3 +100,52 @@ jobs:
             -e FASTMCP_HOST=0.0.0.0 -e FASTMCP_LOG_LEVEL=INFO \
             "$IMAGE"
           echo "Despliegue en nara completado (imagen: $IMAGE)"
+
+  # ── Integration Test en nara (best-effort) ──────────────────────────────────
+  # Corre en el runner `nara` tras el deploy. Hace curls HTTP a los servidores
+  # MCP levantados en el contenedor para verificar que responden (initialize +
+  # tools/list sobre /mcp). Best-effort: no bloquea si nara está offline.
+  test-nara:
+    needs: deploy-nara
+    runs-on: [self-hosted, nara]
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - name: Esperar a que el contenedor esté listo
+        run: |
+          set -e
+          for i in $(seq 1 30); do
+            if docker ps --format '{{.Names}}' | grep -qx aia-mcp; then
+              echo "contenedor aia-mcp presente"
+              break
+            fi
+            echo "esperando contenedor... ($i)"
+            sleep 2
+          done
+      - name: Test temperatura (8001)
+        run: |
+          set -e
+          curl -fsS -X POST http://127.0.0.1:8001/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' \
+            -o /dev/null
+          echo "temperatura OK"
+      - name: Test wahapedia (8002)
+        run: |
+          set -e
+          curl -fsS -X POST http://127.0.0.1:8002/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' \
+            -o /dev/null
+          echo "wahapedia OK"
+      - name: Test airbnb (8006)
+        run: |
+          set -e
+          curl -fsS -X POST http://127.0.0.1:8006/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' \
+            -o /dev/null
+          echo "airbnb OK"

@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.0] — 2026-07-13
+
+### Agregado
+- CI: nueva etapa `test-nara` que corre en el runner `nara` tras el deploy y hace curls HTTP a los servidores MCP levantados en el contenedor (temperatura :8001, wahapedia :8002, airbnb :8006) verificando el handshake `initialize` sobre `/mcp`. Best-effort (`continue-on-error`).
+
 ## [v1.5.9] — 2026-07-13
 
 ### Cambiado
