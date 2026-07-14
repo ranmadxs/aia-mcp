@@ -80,14 +80,23 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      # Despliegue con Docker: solo pull + up de la imagen ya publicada.
-      # Usa el TAG exacto que publicó el paso `publish` (no `latest`).
-      # Sin git: el docker-compose.yml ya está en el workspace del runner.
-      - name: Desplegar con docker compose en nara
+      # Despliegue con docker run puro: pull de la imagen con el TAG exacto
+      # que publicó `publish` y levantar el contenedor. Sin compose, sin git.
+      - name: Desplegar con docker run en nara
         env:
           AIA_MCP_TAG: ${{ github.ref_name }}
         run: |
           set -e
-          docker compose pull aia-mcp
-          docker compose up -d aia-mcp
-          echo "Despliegue en nara completado (imagen: keitarodxs/aia-mcp:${AIA_MCP_TAG})"
+          IMAGE="keitarodxs/aia-mcp:${AIA_MCP_TAG}"
+          docker pull "$IMAGE"
+          docker stop aia-mcp 2>/dev/null || true
+          docker rm aia-mcp 2>/dev/null || true
+          docker run -d --name aia-mcp --restart unless-stopped \
+            -p 8001:8001 -p 8002:8002 -p 8003:8003 -p 8005:8005 \
+            -p 8006:8006 -p 8007:8007 -p 8008:8008 -p 8009:8009 \
+            -p 8010:8010 -p 3000:3000 -p 3333:3333 \
+            -v "$(pwd)/logs:/app/logs" \
+            -v "$(pwd)/.aia:/app/.aia" \
+            -e FASTMCP_HOST=0.0.0.0 -e FASTMCP_LOG_LEVEL=INFO \
+            "$IMAGE"
+          echo "Despliegue en nara completado (imagen: $IMAGE)"

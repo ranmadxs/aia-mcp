@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.9] — 2026-07-13
+
+### Cambiado
+- CI: `deploy-nara` ahora usa `docker run` puro (pull de la imagen con el tag exacto + `docker run` con puertos y volúmenes). Se eliminó `docker-compose.yml` (ya no se usa). Secuencia: test → build → publish → deploy.
+
 ## [v1.5.8] — 2026-07-13
 
 ### Cambiado
