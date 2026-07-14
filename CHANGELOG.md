@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.1] — 2026-07-13
+
+### Arreglado
+- Dockerfile: se instala `poetry-plugin-export` antes de `poetry export`, porque Poetry 1.8.3 (en la imagen base) no incluye el comando `export` por defecto. Sin esto el build fallaba con `The requested command export does not exist.`
+
 ## [v1.5.0] — 2026-07-13
 
 ### Cambiado

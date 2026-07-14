@@ -19,7 +19,9 @@ WORKDIR /app
 # Se exporta a requirements.txt (respeta poetry.lock) y se instala con `uv pip
 # install --system`, que es 10-100x más rápido que `pip install`.
 COPY pyproject.toml poetry.lock ./
-RUN poetry export -f requirements.txt --without-hashes --with dev -o /tmp/requirements.txt 2>/dev/null \
+# Poetry 1.8.x no incluye `export` por defecto: instala el plugin primero.
+RUN uv pip install --system poetry-plugin-export \
+    && poetry export -f requirements.txt --without-hashes --with dev -o /tmp/requirements.txt 2>/dev/null \
     || poetry export -f requirements.txt --without-hashes -o /tmp/requirements.txt \
     && uv pip install --system -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt
