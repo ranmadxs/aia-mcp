@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.2] — 2026-07-13
+
+### Arreglado
+- Dockerfile: el plugin `poetry-plugin-export` se instala ahora con `pip` (el mismo que instaló Poetry en la imagen base) en vez de `uv pip install --system`, porque Poetry no detectaba el plugin instalado por uv.
+
 ## [v1.5.1] — 2026-07-13
 
 ### Arreglado
