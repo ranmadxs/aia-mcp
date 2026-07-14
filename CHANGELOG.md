@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.6] — 2026-07-14
+
+### Arreglado
+- Dockerfile: se copia `README.md` al contenedor antes de `pip install .`. Sin esto el build fallaba con `Readme path /app/README.md does not exist` (el `pyproject.toml` referencia `readme = "README.md"`).
+
 ## [v1.6.5] — 2026-07-14
 
 ### Arreglado

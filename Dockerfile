@@ -37,6 +37,9 @@ COPY charts ./charts
 COPY mcp_email ./mcp_email
 COPY mangadex ./mangadex
 COPY swagger ./swagger
+# README.md es requerido por pyproject.toml (readme = "README.md") para
+# que pip install . genere los metadatos sin error.
+COPY README.md ./README.md
 # Instala el paquete propio (registra el entry point `aia-mcp`).
 # Se usa pip (no uv) para consistencia con la imagen base y evitar fallos
 # silenciosos de build que dejaban el entry point ausente.
