@@ -93,9 +93,9 @@ RUN printf '#!/bin/sh\nset -e\n' > /app/start.sh \
     && printf 'echo "[start] drawio-mcp-server en background (HTTP :3000 / WS :3333)..."\n' >> /app/start.sh \
     && printf 'nohup drawio-mcp-server --host 0.0.0.0 --extension-port 3333 --http-port 3000 --transport http >/tmp/drawio-mcp.log 2>&1 &\n' >> /app/start.sh \
     && printf 'echo "[start] MCPs aia-mcp (all --http)..."\n' >> /app/start.sh \
-    && printf 'exec mcp all --http\n' >> /app/start.sh \
+    && printf 'exec aia-mcp all --http\n' >> /app/start.sh \
     && chmod +x /app/start.sh
 
 # Entry point: levanta TODOS los servidores MCP en modo HTTP (paralelo)
-# Para un solo servidor MCP: docker run ... aia-mcp mcp temperatura --http
+# Para un solo servidor MCP: docker run ... aia-mcp aia-mcp temperatura --http
 ENTRYPOINT ["/app/start.sh"]

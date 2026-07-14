@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aia-mcp"
-version = "1.6.3"
+version = "1.6.4"
 description = "Servidor MCP para el agente aia (amanda-IA)"
 authors = ["ranmadxs <ranmadxs@gmail.com>"]
 readme = "README.md"
@@ -18,7 +18,7 @@ packages = [
 ]
 
 [tool.poetry.scripts]
-mcp = "mcp_cli.cli:main"
+aia-mcp = "mcp_cli.cli:main"
 mcp-swagger = "swagger.server:run_server"
 
 [tool.poetry.dependencies]

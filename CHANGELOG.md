@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.4] — 2026-07-14
+
+### Arreglado
+- Entry point renombrado `mcp` → `aia-mcp` en `pyproject.toml` para evitar colisión con el script `mcp` de la librería `mcp` (que no tiene el comando `all`). El `start.sh` ahora corre `aia-mcp all --http`. Sin esto el contenedor entraba en restart loop con `No such command 'all'`.
+
 ## [v1.6.3] — 2026-07-14
 
 ### Arreglado
