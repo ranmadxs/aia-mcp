@@ -38,7 +38,7 @@ jobs:
           mkdir -p /tmp/image
           docker save keitarodxs/aia-mcp:${{ env.RELEASE_VERSION }} | gzip > /tmp/image/aia-mcp.tar.gz
       - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: aia-mcp-image
           path: /tmp/image/aia-mcp.tar.gz
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download image artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: aia-mcp-image
           path: /tmp/image
@@ -111,7 +111,7 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      - name: Esperar a que el contenedor esté listo
+      - name: Esperar a que el contenedor y los servidores estén listos
         run: |
           set -e
           for i in $(seq 1 30); do
@@ -121,6 +121,19 @@ jobs:
             fi
             echo "esperando contenedor... ($i)"
             sleep 2
+          done
+          # Esperar a que el puerto 8001 (temperatura) responda antes de testear
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8001/mcp \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' 2>/dev/null; then
+              echo "servidor temperatura (:8001) listo"
+              break
+            fi
+            echo "esperando servidor temperatura... ($i)"
+            sleep 3
           done
       - name: Test temperatura (8001)
         run: |

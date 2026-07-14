@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.1] — 2026-07-13
+
+### Arreglado
+- CI: `test-nara` ahora espera a que el puerto 8001 (temperatura) responda antes de testear (los servidores tardan en arrancar tras el deploy). Subidas `upload-artifact`/`download-artifact` a `@v5` (Node 24) para eliminar el warning de Node.js 20.
+
 ## [v1.6.0] — 2026-07-13
 
 ### Agregado
