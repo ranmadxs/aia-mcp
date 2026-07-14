@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.7] — 2026-07-14
+
+### Arreglado
+- CI: cada test de `test-nara` (temperatura/wahapedia/airbnb) ahora espera a que su puerto responda con reintentos (60x3s). Antes airbnb daba `empty reply` porque arrancaba ~6s después de los otros y el curl corría sin espera.
+
 ## [v1.6.6] — 2026-07-14
 
 ### Arreglado

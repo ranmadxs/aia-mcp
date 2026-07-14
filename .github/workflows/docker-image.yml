@@ -142,27 +142,42 @@ jobs:
       - name: Test temperatura (8001)
         run: |
           set -e
-          curl -fsS -X POST http://127.0.0.1:8001/mcp \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' \
-            -o /dev/null
-          echo "temperatura OK"
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8001/mcp \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' 2>/dev/null; then
+              echo "temperatura OK"; exit 0
+            fi
+            echo "esperando temperatura... ($i)"; sleep 3
+          done
+          echo "TIMEOUT temperatura"; docker logs aia-mcp --tail 30 || true; exit 1
       - name: Test wahapedia (8002)
         run: |
           set -e
-          curl -fsS -X POST http://127.0.0.1:8002/mcp \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' \
-            -o /dev/null
-          echo "wahapedia OK"
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8002/mcp \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' 2>/dev/null; then
+              echo "wahapedia OK"; exit 0
+            fi
+            echo "esperando wahapedia... ($i)"; sleep 3
+          done
+          echo "TIMEOUT wahapedia"; docker logs aia-mcp --tail 30 || true; exit 1
       - name: Test airbnb (8006)
         run: |
           set -e
-          curl -fsS -X POST http://127.0.0.1:8006/mcp \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' \
-            -o /dev/null
-          echo "airbnb OK"
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8006/mcp \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' 2>/dev/null; then
+              echo "airbnb OK"; exit 0
+            fi
+            echo "esperando airbnb... ($i)"; sleep 3
+          done
+          echo "TIMEOUT airbnb"; docker logs aia-mcp --tail 30 || true; exit 1
