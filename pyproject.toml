@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "aia-mcp"
-version = "1.6.2"
+version = "1.6.3"
 description = "Servidor MCP para el agente aia (amanda-IA)"
 authors = ["ranmadxs <ranmadxs@gmail.com>"]
 readme = "README.md"
@@ -23,7 +23,7 @@ mcp-swagger = "swagger.server:run_server"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-mcp = ">=1.0"
+mcp = {version = ">=1.0", extras = ["cli"]}
 httpx = ">=0.27"
 beautifulsoup4 = ">=4.12"
 paho-mqtt = ">=2.0"

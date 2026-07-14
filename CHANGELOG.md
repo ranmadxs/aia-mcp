@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.6.3] — 2026-07-14
+
+### Arreglado
+- Deps: `mcp` ahora usa el extra `[cli]` (`mcp = {version = ">=1.0", extras = ["cli"]}`) para instalar `typer`. Sin esto el entry point `mcp` fallaba con `Error: typer is required` y el contenedor entraba en restart loop (puertos nunca escuchaban). Regenerado `poetry.lock`.
+
 ## [v1.6.2] — 2026-07-13
 
 ### Arreglado
