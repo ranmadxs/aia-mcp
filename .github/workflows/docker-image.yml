@@ -95,8 +95,8 @@ jobs:
             -p 8001:8001 -p 8002:8002 -p 8003:8003 -p 8005:8005 \
             -p 8006:8006 -p 8007:8007 -p 8008:8008 -p 8009:8009 \
             -p 8010:8010 -p 3000:3000 -p 3333:3333 \
-            -v "$(pwd)/logs:/app/logs" \
-            -v "$(pwd)/.aia:/app/.aia" \
+            -v /opt/aia-mcp/logs:/app/logs \
+            -v /opt/aia-mcp/.aia:/app/.aia \
             -e FASTMCP_HOST=0.0.0.0 -e FASTMCP_LOG_LEVEL=INFO \
             "$IMAGE"
           echo "Despliegue en nara completado (imagen: $IMAGE)"
