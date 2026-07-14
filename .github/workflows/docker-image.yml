@@ -68,7 +68,8 @@ jobs:
   # ── Despliegue continuo en nara (best-effort) ───────────────────────────────
   # Corre DIRECTAMENTE en el self-hosted runner `nara` (sin SSH). El build de la
   # imagen ocurre arriba en los runners de GitHub; aquí solo se hace pull y up
-  # de la imagen ya publicada usando docker compose.
+  # de la imagen ya publicada. Los volúmenes se montan en rutas persistentes de
+  # nara (/opt/aia-mcp) fuera del workspace del runner.
   #
   # No consultamos la API de runners (el GITHUB_TOKEN de integración no tiene
   # permiso para /actions/runners -> 403). En su lugar: el job se asigna al
@@ -95,8 +96,8 @@ jobs:
             -p 8001:8001 -p 8002:8002 -p 8003:8003 -p 8005:8005 \
             -p 8006:8006 -p 8007:8007 -p 8008:8008 -p 8009:8009 \
             -p 8010:8010 -p 3000:3000 -p 3333:3333 \
-            -v /home/ranmadxs/aia-mcp/logs:/app/logs \
-            -v /home/ranmadxs/aia-mcp/.aia:/app/.aia \
+            -v /opt/aia-mcp/logs:/app/logs \
+            -v /opt/aia-mcp/.aia:/app/.aia \
             -e FASTMCP_HOST=0.0.0.0 -e FASTMCP_LOG_LEVEL=INFO \
             "$IMAGE"
           echo "Despliegue en nara completado (imagen: $IMAGE)"
