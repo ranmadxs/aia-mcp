@@ -5,10 +5,15 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.0] — 2026-07-14
+
+### Cambiado
+- CI: `deploy-nara` monta los volúmenes en rutas persistentes de nara (`/home/ranmadxs/aia-mcp/logs` y `/home/ranmadxs/aia-mcp/.aia`) en vez del workspace del runner. Se crea `/home/ranmadxs/aia-mcp/config` para configuración futura.
+
 ## [v1.6.9] — 2026-07-14
 
 ### Cambiado
-- CI: `deploy-nara` monta los volúmenes en rutas persistentes de nara (`/opt/aia-mcp/logs` y `/opt/aia-mcp/.aia`) en vez del workspace del runner. Se crea `/opt/aia-mcp/config` para configuración futura.
+- CI: `deploy-nara` monta los volúmenes en rutas persistentes de nara (`/home/ranmadxs/aia-mcp/logs` y `/home/ranmadxs/aia-mcp/.aia`) en vez del workspace del runner. Se crea `/home/ranmadxs/aia-mcp/config` para configuración futura.
 
 ## [v1.6.8] — 2026-07-14
 
