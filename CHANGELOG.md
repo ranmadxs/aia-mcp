@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.5] — 2026-07-13
+
+### Arreglado
+- CI: `deploy-nara` clona el repo si no existe `.git` (el runner self-hosted no conserva el repo entre jobs) en vez de asumir `git pull`, evitando `fatal: not a git repository` (exit 128).
+
 ## [v1.5.4] — 2026-07-13
 
 ### Cambiado
