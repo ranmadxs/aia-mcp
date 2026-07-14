@@ -9,7 +9,7 @@
 # Ver: https://github.com/ranmadxs/aia-utils (PR #1, imagen keitarodxs/aia-utils-base)
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM keitarodxs/aia-utils-base:feat-dockerfile-base-breaking
+FROM keitarodxs/aia-utils-base:v1.0.0
 
 WORKDIR /app
 

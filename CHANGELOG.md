@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.0] — 2026-07-13
+
+### Cambiado
+- Dockerfile: `FROM` actualizado a la imagen base release `keitarodxs/aia-utils-base:v1.0.0` (publicada desde aia-utils PR #1). Antes usaba el tag de rama `feat-dockerfile-base-breaking`.
+
+---
+
 ## [v1.4.1] — 2026-07-13
 
 ### Arreglado
