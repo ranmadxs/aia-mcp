@@ -80,22 +80,14 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      # NO usamos actions/checkout: checkout intenta limpiar el workspace y
-      # choca con logs/ (archivos de dueño root del contenedor) -> EACCES.
-      # En su lugar clonamos si no existe .git, o hacemos pull si ya existe.
-      - name: Obtener repo (clone o pull)
-        run: |
-          set -e
-          if [ ! -d .git ]; then
-            git clone --depth 1 --branch "${GITHUB_REF_NAME}" "https://github.com/${{ github.repository }}.git" .
-          else
-            git config --global --add safe.directory "$(pwd)"
-            git fetch --depth 1 origin "${GITHUB_REF_NAME}"
-            git reset --hard "origin/${GITHUB_REF_NAME}"
-          fi
+      # Despliegue con Docker: solo pull + up de la imagen ya publicada.
+      # Usa el TAG exacto que publicó el paso `publish` (no `latest`).
+      # Sin git: el docker-compose.yml ya está en el workspace del runner.
       - name: Desplegar con docker compose en nara
+        env:
+          AIA_MCP_TAG: ${{ github.ref_name }}
         run: |
           set -e
           docker compose pull aia-mcp
           docker compose up -d aia-mcp
-          echo "Despliegue en nara completado"
+          echo "Despliegue en nara completado (imagen: keitarodxs/aia-mcp:${AIA_MCP_TAG})"

@@ -5,7 +5,7 @@
 
 services:
   aia-mcp:
-    image: keitarodxs/aia-mcp:latest
+    image: keitarodxs/aia-mcp:${AIA_MCP_TAG:-latest}
     container_name: aia-mcp
     restart: unless-stopped
 

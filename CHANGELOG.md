@@ -5,6 +5,16 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.8] — 2026-07-13
+
+### Cambiado
+- CI: `deploy-nara` ahora despliega el **tag exacto** publicado por `publish` (variable `AIA_MCP_TAG`), no `latest`. El `docker-compose.yml` usa `image: keitarodxs/aia-mcp:${AIA_MCP_TAG:-latest}` (default `latest` para uso local). Secuencia: test → build → publish → deploy.
+
+## [v1.5.7] — 2026-07-13
+
+### Arreglado
+- CI: `deploy-nara` clona el repo en un directorio temporal y lo copia al workspace (sin borrar `logs/`), en vez de `git clone .` que fallaba con `destination path '.' already exists`.
+
 ## [v1.5.6] — 2026-07-13
 
 ### Cambiado
