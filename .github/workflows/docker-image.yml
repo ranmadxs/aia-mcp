@@ -62,12 +62,15 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
-      # clean: false -> no intenta borrar logs/ (archivos de dueño root del
-      # contenedor) que causaban EACCES y fallaban el job.
-      - uses: actions/checkout@v4
-        with:
-          clean: false
-          fetch-depth: 1
+      # NO usamos actions/checkout: el repo ya está clonado en el workspace del
+      # runner (dueño ranmadxs). checkout intenta limpiar el directorio y choca
+      # con logs/ (archivos de dueño root del contenedor) -> EACCES. En su lugar
+      # hacemos git pull manual dentro del workspace existente.
+      - name: Actualizar repo (git pull)
+        run: |
+          set -e
+          git config --global --add safe.directory "$(pwd)"
+          git pull --ff-only origin "${GITHUB_REF_NAME}"
       - name: Desplegar con docker compose en nara
         run: |
           set -e

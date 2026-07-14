@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.3] — 2026-07-13
+
+### Arreglado
+- CI: `deploy-nara` ya no usa `actions/checkout` (que intentaba limpiar el workspace y chocaba con `logs/` de dueño root del contenedor → EACCES). Ahora hace `git pull` manual dentro del workspace ya clonado en el runner.
+
 ## [v1.5.2] — 2026-07-13
 
 ### Arreglado
