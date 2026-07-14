@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.4] — 2026-07-13
+
+### Cambiado
+- CI: separadas las etapas `build` y `publish` en ambos workflows.
+  - `docker-image.yml`: `build` construye la imagen y la sube como artifact; `publish` la descarga, hace login y push a Docker Hub (tag de versión + `latest`). `deploy-nara` ahora depende de `publish`.
+  - `python-publish.yml`: `build` genera wheel+sdist y los sube como artifact; `publish` los descarga y los sube a PyPI con `twine` (en vez de `JRubics/poetry-publish`).
+
 ## [v1.5.3] — 2026-07-13
 
 ### Arreglado
