@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.5.6] — 2026-07-13
+
+### Cambiado
+- CI: subidas las actions a versiones con Node 24 (`actions/checkout@v4` → `@v7`, `actions/setup-python@v5` → `@v6`) para eliminar el warning de deprecación de Node.js 20.
+
 ## [v1.5.5] — 2026-07-13
 
 ### Arreglado
