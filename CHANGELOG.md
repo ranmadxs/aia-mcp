@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.4.1] — 2026-07-13
+
+### Arreglado
+- `docker-image.yml`: `deploy-nara` ahora usa `actions/checkout@v4` con `clean: false`. Antes el checkout intentaba borrar `logs/` (archivos de dueño root del contenedor) y fallaba con `EACCES: permission denied`, rompiendo el despliegue en nara.
+
+---
+
 ## [v1.4.0] — 2026-07-13
 
 ### Cambiado

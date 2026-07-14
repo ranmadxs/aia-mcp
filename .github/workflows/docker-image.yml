@@ -62,7 +62,12 @@ jobs:
     continue-on-error: true
     timeout-minutes: 10
     steps:
+      # clean: false -> no intenta borrar logs/ (archivos de dueño root del
+      # contenedor) que causaban EACCES y fallaban el job.
       - uses: actions/checkout@v4
+        with:
+          clean: false
+          fetch-depth: 1
       - name: Desplegar con docker compose en nara
         run: |
           set -e
