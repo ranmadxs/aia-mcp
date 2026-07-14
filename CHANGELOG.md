@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.4.0] — 2026-07-13
+
+### Cambiado
+- Dockerfile: ahora usa la imagen base del ecosistema `keitarodxs/aia-utils-base:feat-dockerfile-base-breaking` (PR #1 de aia-utils). Se elimina del Dockerfile la instalación de Python, apt (git/curl/ca-certificates/build-essential), Poetry, uv, Node.js y drawio-mcp-server, que ya vienen en la base. El Dockerfile queda mucho más pequeño: solo copia el código, instala deps con `uv` y define ENV/VOLUME/EXPOSE/start.sh.
+
+---
+
 ## [v1.3.2] — 2026-07-13
 
 ### Arreglado

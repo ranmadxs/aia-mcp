@@ -1,49 +1,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # aia-mcp — imagen Docker
 # Servidor MCP (Model Context Protocol) para el agente aia (amanda-IA)
+#
+# Usa la imagen base del ecosistema aia (aia-utils), que ya trae:
+#   Python 3.13-slim, git, curl, ca-certificates, build-essential/gcc,
+#   Poetry (para `poetry export`), uv (instalador rápido) y
+#   Node.js 20 + drawio-mcp-server@2.2.0.
+# Ver: https://github.com/ranmadxs/aia-utils (PR #1, imagen keitarodxs/aia-utils-base)
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM python:3.13-slim
-
-# Evita prompts interactivos y writes .pyc
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    POETRY_VERSION=1.8.3 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    POETRY_NO_INTERACTION=1
-
-# Dependencias del sistema:
-# - build-essential / gcc: compilación de paquetes con extensiones C (pymongo, etc.)
-# - git: requerido por el servidor "shell" y mangadex-downloader
-# - ca-certificates / curl: descargas varias
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        gcc \
-        git \
-        curl \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-# Instala Poetry (gestor de dependencias del proyecto, solo para `poetry export`)
-RUN pip install --no-cache-dir "poetry==${POETRY_VERSION}"
-
-# Instala uv (instalador de paquetes en Rust, 10-100x más rápido que pip).
-# Se usa para instalar las deps en la imagen; el proyecto sigue gestionado con
-# poetry (pyproject.toml + poetry.lock).
-RUN pip install --no-cache-dir uv
-
-# uv usa el Python del sistema (sin crear venv dentro del contenedor)
-ENV UV_SYSTEM_PYTHON=1 \
-    UV_NO_CACHE=1
-
-# ── Instala Node.js + npm (prerequisito para drawio-mcp-server) ───────────────
-# Usa NodeSource para tener una versión reciente de Node en Debian/Ubuntu slim.
-RUN set -eux; \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -; \
-    apt-get install -y --no-install-recommends nodejs; \
-    rm -rf /var/lib/apt/lists/*; \
-    node --version; npm --version
+FROM keitarodxs/aia-utils-base:feat-dockerfile-base-breaking
 
 WORKDIR /app
 
@@ -70,12 +36,6 @@ COPY mangadex ./mangadex
 COPY swagger ./swagger
 # Instala el paquete propio (registra el entry point `mcp`).
 RUN uv pip install --system . 2>&1 || true
-
-# ── Instala drawio-mcp-server (npm) ───────────────────────────────────────────
-# Expone MCP Streamable HTTP en :3000 y WebSocket de extensión en :3333.
-# Versión fijada para evitar sorpresas con @latest.
-RUN npm install -g drawio-mcp-server@2.2.0 \
-    && drawio-mcp-server --help >/dev/null 2>&1 || true
 
 # ── Variables de entorno por defecto ──────────────────────────────────────────
 # Host de FastMCP (0.0.0.0 para escuchar dentro del contenedor)

@@ -125,6 +125,8 @@ Esto levanta el contenedor `aia-mcp` con todos los puertos mapeados y los volúm
 > (`pyproject.toml` + `poetry.lock`), pero dentro del `Dockerfile` las dependencias
 > se instalan con [`uv`](https://github.com/astral-sh/uv) (`uv pip install --system`)
 > por velocidad. El `poetry.lock` se respeta vía `poetry export` a `requirements.txt`.
+> La imagen parte de la base del ecosistema `keitarodxs/aia-utils-base` (Python 3.13,
+> git, uv, Node 20 + drawio-mcp-server ya incluidos).
 
 ## Tests
 
