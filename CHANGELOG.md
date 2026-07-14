@@ -5,6 +5,13 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.3.2] — 2026-07-13
+
+### Arreglado
+- `python-publish.yml`: añadido job `test` (pytest) y `build` ahora tiene `needs: test`. Antes la publicación en PyPI no validaba tests; ahora si los tests fallan no se publica la versión (igual que `docker-image.yml`).
+
+---
+
 ## [v1.3.1] — 2026-07-13
 
 ### Documentación
