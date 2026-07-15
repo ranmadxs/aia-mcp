@@ -5,6 +5,14 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.3] — 2026-07-14
+
+### Añadido
+- Email MCP: extracción de adjuntos (PDF, etc.) en base64 dentro de `attachments` en `_parse_email`.
+- Email MCP: cartolas BCI cache-first. `get_bci_cartola(period, force_refresh)` lee de MongoDB por período `YYYY-MM`; si no existe, descarga de Yahoo (`bcimail@bci.cl`) y guarda. Cada mes = nueva clave de cache, así las cartolas nuevas se resuelven solas.
+- Email MCP: `sync_bci_cartolas(months_back)` sincroniza las últimas N cartolas (una por mes) y `list_bci_cartolas()` lista las en cache.
+- Tests: `tests/test_email.py` cubre parser de adjuntos PDF (base64), resolución de período, ventana de búsqueda IMAP y lógica cache-first (hit/miss/force_refresh) con mocks.
+
 ## [v1.7.2] — 2026-07-14
 
 ### Cambiado

@@ -1,10 +1,11 @@
 """Servidor MCP Email — gestión de correo Yahoo vía IMAP + MongoDB Atlas."""
 
+import base64
 import email as email_lib
 import imaplib
 import os
 import tomllib
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -38,6 +39,7 @@ IMAP_PORT         = 993
 MONGODB_URI       = os.getenv("MONGODB_URI", "")
 DB_NAME           = "email"
 COLLECTION        = "emails"
+BCI_SENDER         = "bcimail@bci.cl"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -51,7 +53,7 @@ def _decode_str(s) -> str:
 
 
 def _parse_email(msg) -> dict:
-    """Extrae campos relevantes de un mensaje IMAP."""
+    """Extrae campos relevantes de un mensaje IMAP, incluidos adjuntos (base64)."""
     subject = ""
     subj_raw = msg.get("Subject")
     if subj_raw:
@@ -67,20 +69,31 @@ def _parse_email(msg) -> dict:
             pass
 
     body_text = body_html = ""
+    attachments = []
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
+            filename = part.get_filename()
             try:
                 payload = part.get_payload(decode=True)
-                if payload is None:
-                    continue
-                decoded = payload.decode("utf-8", errors="replace")
-                if ctype == "text/plain" and not body_text:
-                    body_text = decoded
-                elif ctype == "text/html" and not body_html:
-                    body_html = decoded
             except Exception:
-                pass
+                payload = None
+            # Adjunto (PDF, etc.) -> guardar en base64
+            if filename and ctype not in ("text/plain", "text/html") and payload:
+                attachments.append({
+                    "filename": _decode_str(filename),
+                    "content_type": ctype,
+                    "size": len(payload),
+                    "data_b64": base64.b64encode(payload).decode("ascii"),
+                })
+                continue
+            if payload is None:
+                continue
+            decoded = payload.decode("utf-8", errors="replace")
+            if ctype == "text/plain" and not body_text:
+                body_text = decoded
+            elif ctype == "text/html" and not body_html:
+                body_html = decoded
     else:
         try:
             payload = msg.get_payload(decode=True)
@@ -97,10 +110,13 @@ def _parse_email(msg) -> dict:
         "date_str": date_str,
         "body_text": body_text[:50000],
         "body_html": body_html[:50000],
-        "fetched_at": datetime.utcnow().isoformat(),
+        "attachments": attachments,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+        "kind": "email",
     }
     if fecha_remitente:
         doc["fecha_remitente"] = fecha_remitente
+        doc["period"] = fecha_remitente.strftime("%Y-%m")
     return doc
 
 
@@ -406,6 +422,152 @@ def get_email_stats() -> str:
     for m in by_month:
         lines.append(f"- {m['_id']}: {m['count']} emails")
 
+    return "\n".join(lines)
+
+
+# ── Cartolas BCI (cache-first: MongoDB -> Yahoo) ─────────────────────────────
+
+def _resolve_period(period: str) -> str:
+    return period or datetime.now(timezone.utc).strftime("%Y-%m")
+
+
+def _imap_search_bci(period: str):
+    """Busca UIDs de correos de BCI en Yahoo para el período (ventana ampliada
+    para captar cartolas que llegan a inicios del mes siguiente)."""
+    y, m = (int(x) for x in period.split("-"))
+    since = date(y, m, 1) - timedelta(days=10)
+    before = (date(y, m + 1, 1) if m < 12 else date(y + 1, 1, 1)) + timedelta(days=40)
+    fmt = "%d-%b-%Y"
+    mail = _imap_connect()
+    mail.select("INBOX")
+    _, msgs = mail.search(None, f'FROM "{BCI_SENDER}" SINCE {since.strftime(fmt)} BEFORE {before.strftime(fmt)}')
+    ids = msgs[0].split()
+    mail.logout()
+    return ids
+
+
+def _fetch_bci_cartola(period: str, force_refresh: bool = False):
+    """Cache-first: lee de MongoDB por período; si no existe, descarga de Yahoo.
+    Devuelve (doc, cache_hit). doc=None si no encontrado."""
+    col = _get_collection()
+    if col is not None and not force_refresh:
+        doc = col.find_one(
+            {"from_addr": {"$regex": BCI_SENDER, "$options": "i"}, "period": period},
+            sort=[("fecha_remitente", -1)],
+        )
+        if doc:
+            return doc, True
+    try:
+        ids = _imap_search_bci(period)
+    except Exception as e:
+        return {"error": str(e)}, False
+    if not ids:
+        return None, False
+    mail = _imap_connect()
+    mail.select("INBOX")
+    _, data = mail.fetch(ids[-1], "(RFC822)")
+    mail.logout()
+    if not data or data[0] is None:
+        return None, False
+    doc = _parse_email(email_lib.message_from_bytes(data[0][1]))
+    doc["period"] = period
+    doc["kind"] = "bci_cartola"
+    if col is not None:
+        col.insert_one(doc)
+    return doc, False
+
+
+@mcp.tool()
+def get_bci_cartola(period: str = "", force_refresh: bool = False) -> str:
+    """
+    Obtiene la cartola cuenta corriente BCI (bcimail@bci.cl) para un período.
+    Cache-first: si ya está en MongoDB la lee de ahí; si no, la descarga de Yahoo
+    y la guarda (adjunto PDF en base64). Cada mes = nueva clave de cache.
+
+    Args:
+        period: Período "YYYY-MM" (ej: "2026-07"). Vacío = mes actual.
+        force_refresh: Si True, re-descarga de Yahoo aunque exista en cache.
+
+    Returns:
+        Resumen de la cartola y sus adjuntos (o error si no se encontró).
+    """
+    period = _resolve_period(period)
+    doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
+    if doc is None:
+        return (f"❌ No se encontró cartola BCI para {period} en Yahoo ni MongoDB "
+                f"(¿aún no enviada para ese mes?).")  # noqa: E501
+    if isinstance(doc, dict) and doc.get("error"):
+        return f"❌ Error IMAP: {doc['error']}\n\nUsa App Password de Yahoo."
+    src = "📦 MongoDB (cache)" if cache_hit else "⬇️ Yahoo (nueva)"
+    atts = doc.get("attachments", [])
+    lines = [
+        f"## Cartola BCI {period} — {src}\n",
+        f"**Asunto**: {doc.get('subject', '')}",
+        f"**De**: {doc.get('from_addr', '')}",
+        f"**Fecha**: {doc.get('fecha_remitente', doc.get('date_str', ''))}",
+    ]
+    if atts:
+        lines.append(f"\n**Adjuntos ({len(atts)})**:")
+        for a in atts:
+            lines.append(f"- `{a['filename']}` ({a['content_type']}, {a['size']} bytes, base64 en MongoDB)")
+    else:
+        lines.append("\n⚠️ Sin adjuntos PDF en este correo.")
+    lines.append(f"\n**Message-ID**: `{doc.get('message_id', '')}`")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def sync_bci_cartolas(months_back: int = 6, force_refresh: bool = False) -> str:
+    """
+    Sincroniza las últimas N cartolas BCI (una por mes) a MongoDB.
+    Para cada mes hace cache-first: si ya existe en MongoDB la omite.
+
+    Args:
+        months_back: Cantidad de meses hacia atrás a sincronizar (default 6).
+        force_refresh: Si True, re-descarga aunque existan en cache.
+
+    Returns:
+        Resumen por mes de lo sincronizado.
+    """
+    today = date.today()
+    results = []
+    for i in range(max(1, months_back)):
+        y, m = today.year, today.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        period = f"{y:04d}-{m:02d}"
+        doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
+        if doc is None:
+            results.append(f"- {period}: ❌ no encontrada")
+        elif isinstance(doc, dict) and doc.get("error"):
+            results.append(f"- {period}: ❌ error {doc['error']}")
+        else:
+            tag = "cache" if cache_hit else "nueva"
+            results.append(f"- {period}: ✅ {tag} ({len(doc.get('attachments', []))} adjuntos)")
+    return "## Sync cartolas BCI\n" + "\n".join(results)
+
+
+@mcp.tool()
+def list_bci_cartolas() -> str:
+    """
+    Lista las cartolas BCI guardadas en MongoDB, agrupadas por período.
+
+    Returns:
+        Lista de períodos en cache con asunto y fecha.
+    """
+    col = _get_collection()
+    if col is None:
+        return "❌ MongoDB no disponible."
+    docs = list(col.find(
+        {"kind": "bci_cartola"},
+        {"attachments": 0, "body_text": 0, "body_html": 0},
+    ).sort("period", -1))
+    if not docs:
+        return "No hay cartolas BCI en cache. Usa sync_bci_cartolas() o get_bci_cartola()."
+    lines = [f"## {len(docs)} cartolas BCI en cache\n"]
+    for d in docs:
+        lines.append(f"- **{d.get('period')}**: {d.get('subject', '')}  |  {d.get('fecha_remitente', '')}")
     return "\n".join(lines)
 
 
