@@ -68,7 +68,8 @@ def test_get_bci_cartola_ingresos_tool_formato(monkeypatch):
 
     monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
     monkeypatch.setattr(srv, "BCI_PDF_PASSWORD", PW)
-    result = srv.get_bci_cartola_ingresos("2026-07")
+    import anyio
+    result = anyio.run(srv.get_bci_cartola_ingresos, "2026-07")
     assert "INGRESOS" in result.upper() or "Ingresos" in result
     assert "100.000" in result  # formateado con puntos
     assert "200.000" in result
@@ -105,6 +106,32 @@ def test_imap_search_bci_usa_mes_siguiente(monkeypatch):
     assert "SINCE" in crit and "BEFORE" in crit
     # El mes siguiente a feb es marzo -> SINCE debe mencionar Mar
     assert "Mar" in crit
+
+
+def test_get_bci_sync_status_lee_estado(monkeypatch):
+    """get_bci_sync_status debe leer el estado persistido sin tocar Yahoo."""
+
+    class _DB:
+        def __getitem__(self, name):
+            return _Col()
+
+    class _Col:
+        def find_one(self, filt, sort=None):
+            return {"_id": "bci", "running": True, "current_period": "2026-07",
+                    "completed": 3, "total": 7, "started_at": "t", "finished_at": None}
+
+        def update_one(self, q, u, upsert=False):
+            return None
+
+        @property
+        def database(self):
+            return _DB()
+
+    monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
+    out = srv.get_bci_sync_status()
+    assert "EN CURSO" in out
+    assert "2026-07" in out
+    assert "3/7" in out
 
 
 def test_fetch_bci_cartola_guarda_periodo_derivado(monkeypatch):

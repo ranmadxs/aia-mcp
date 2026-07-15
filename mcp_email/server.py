@@ -428,6 +428,48 @@ def get_email_stats() -> str:
 
 # ── Cartolas BCI (cache-first: MongoDB -> Yahoo) ─────────────────────────────
 
+# Estado de la sincronización en background. Se persiste en Mongo (email.sync_state)
+# para que sea consultable desde cualquier worker de uvicorn (Opción C: workers).
+_SYNC_STATE_COL = "sync_state"
+
+
+def _sync_state_col():
+    col = _get_collection()
+    if col is None:
+        return None
+    return col.database["sync_state"]
+
+
+def _update_sync_state(**fields):
+    """Actualiza el estado de sync en Mongo (documento único _id='bci')."""
+    col = _sync_state_col()
+    if col is None:
+        return
+    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        col.update_one({"_id": "bci"}, {"$set": fields}, upsert=True)
+    except Exception:
+        pass
+
+
+def _read_sync_state() -> dict:
+    col = _sync_state_col()
+    if col is None:
+        return {"running": False, "current_period": None, "completed": 0,
+                "total": 0, "last_error": None, "started_at": None,
+                "finished_at": None, "note": "MongoDB no disponible"}
+    try:
+        doc = col.find_one({"_id": "bci"})
+    except Exception:
+        doc = None
+    if not doc:
+        return {"running": False, "current_period": None, "completed": 0,
+                "total": 0, "last_error": None, "started_at": None,
+                "finished_at": None}
+    doc.pop("_id", None)
+    return doc
+
+
 def _resolve_period(period: str) -> str:
     return period or datetime.now(timezone.utc).strftime("%Y-%m")
 
@@ -598,7 +640,7 @@ def _extract_movements(pdf_bytes: bytes, password: str) -> list[dict]:
 
 
 @mcp.tool()
-def get_bci_cartola_ingresos(period: str = "", rut_password: str = "",
+async def get_bci_cartola_ingresos(period: str = "", rut_password: str = "",
                              force_refresh: bool = False) -> str:
     """
     Extrae solo los INGRESOS (abonos, depósitos, transferencias recibidas) de la
@@ -615,42 +657,47 @@ def get_bci_cartola_ingresos(period: str = "", rut_password: str = "",
     Returns:
         Lista de ingresos (fecha, descripción, monto) y total del mes.
     """
-    period = _resolve_period(period)
-    doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
-    if doc is None:
-        return (f"❌ No se encontró cartola BCI para {period} en Yahoo ni MongoDB "
-                f"(¿aún no enviada para ese mes?).")
-    if isinstance(doc, dict) and doc.get("error"):
-        return f"❌ Error IMAP: {doc['error']}\n\nUsa App Password de Yahoo."
-    atts = doc.get("attachments", [])
-    if not atts:
-        return f"⚠️ La cartola {period} no tiene adjunto PDF para analizar."
-    password = rut_password or BCI_PDF_PASSWORD
-    if not password:
-        return ("❌ Falta la clave del PDF. Pasa `rut_password` (RUT de la cuenta) "
-                "o define BCI_PDF_PASSWORD en el entorno.")
-    try:
-        import base64 as _b64
-        pdf_bytes = _b64.b64decode(atts[0]["data_b64"])
-        movements = _extract_movements(pdf_bytes, password)
-    except Exception as e:
-        return (f"❌ No se pudo leer el PDF de la cartola ({e}). "
-                f"Verifica la clave (RUT de la cuenta BCI).")
-    ingresos = [m for m in movements if m["is_ingreso"]]
-    total = sum(m["monto"] for m in ingresos)
-    src = "📦 MongoDB (cache)" if cache_hit else "⬇️ Yahoo (nueva)"
-    lines = [
-        f"## Ingresos cartola BCI {period} — {src}",
-        f"**Total ingresos**: {total:,.0f}  |  **Movimientos**: {len(movements)}  "
-        f"|  **Ingresos**: {len(ingresos)}\n",
-    ]
-    for m in ingresos:
-        lines.append(f"- **{m['fecha']}**  {m['descripcion']}: {m['monto']:,.0f}")
-    return "\n".join(lines)
+    import anyio
+
+    def _blocking():
+        period_r = _resolve_period(period)
+        doc, cache_hit = _fetch_bci_cartola(period_r, force_refresh)
+        if doc is None:
+            return (f"❌ No se encontró cartola BCI para {period_r} en Yahoo ni MongoDB "
+                    f"(¿aún no enviada para ese mes?).")
+        if isinstance(doc, dict) and doc.get("error"):
+            return f"❌ Error IMAP: {doc['error']}\n\nUsa App Password de Yahoo."
+        atts = doc.get("attachments", [])
+        if not atts:
+            return f"⚠️ La cartola {period_r} no tiene adjunto PDF para analizar."
+        password = rut_password or BCI_PDF_PASSWORD
+        if not password:
+            return ("❌ Falta la clave del PDF. Pasa `rut_password` (RUT de la cuenta) "
+                    "o define BCI_PDF_PASSWORD en el entorno.")
+        try:
+            import base64 as _b64
+            pdf_bytes = _b64.b64decode(atts[0]["data_b64"])
+            movements = _extract_movements(pdf_bytes, password)
+        except Exception as e:
+            return (f"❌ No se pudo leer el PDF de la cartola ({e}). "
+                    f"Verifica la clave (RUT de la cuenta BCI).")
+        ingresos = [m for m in movements if m["is_ingreso"]]
+        total = sum(m["monto"] for m in ingresos)
+        src = "📦 MongoDB (cache)" if cache_hit else "⬇️ Yahoo (nueva)"
+        lines = [
+            f"## Ingresos cartola BCI {period_r} — {src}",
+            f"**Total ingresos**: {total:,.0f}  |  **Movimientos**: {len(movements)}  "
+            f"|  **Ingresos**: {len(ingresos)}\n",
+        ]
+        for m in ingresos:
+            lines.append(f"- **{m['fecha']}**  {m['descripcion']}: {m['monto']:,.0f}")
+        return "\n".join(lines)
+
+    return await anyio.to_thread.run_sync(_blocking)
 
 
 @mcp.tool()
-def get_bci_cartola(period: str = "", force_refresh: bool = False) -> str:
+async def get_bci_cartola(period: str = "", force_refresh: bool = False) -> str:
     """
     Obtiene la cartola cuenta corriente BCI (bcimail@bci.cl) para un período.
     Cache-first: si ya está en MongoDB la lee de ahí; si no, la descarga de Yahoo
@@ -663,61 +710,135 @@ def get_bci_cartola(period: str = "", force_refresh: bool = False) -> str:
     Returns:
         Resumen de la cartola y sus adjuntos (o error si no se encontró).
     """
-    period = _resolve_period(period)
-    doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
-    if doc is None:
-        return (f"❌ No se encontró cartola BCI para {period} en Yahoo ni MongoDB "
-                f"(¿aún no enviada para ese mes?).")  # noqa: E501
-    if isinstance(doc, dict) and doc.get("error"):
-        return f"❌ Error IMAP: {doc['error']}\n\nUsa App Password de Yahoo."
-    src = "📦 MongoDB (cache)" if cache_hit else "⬇️ Yahoo (nueva)"
-    atts = doc.get("attachments", [])
-    lines = [
-        f"## Cartola BCI {period} — {src}\n",
-        f"**Asunto**: {doc.get('subject', '')}",
-        f"**De**: {doc.get('from_addr', '')}",
-        f"**Fecha**: {doc.get('fecha_remitente', doc.get('date_str', ''))}",
-    ]
-    if atts:
-        lines.append(f"\n**Adjuntos ({len(atts)})**:")
-        for a in atts:
-            lines.append(f"- `{a['filename']}` ({a['content_type']}, {a['size']} bytes, base64 en MongoDB)")
-    else:
-        lines.append("\n⚠️ Sin adjuntos PDF en este correo.")
-    lines.append(f"\n**Message-ID**: `{doc.get('message_id', '')}`")
-    return "\n".join(lines)
+    import anyio
+
+    def _blocking():
+        period_r = _resolve_period(period)
+        doc, cache_hit = _fetch_bci_cartola(period_r, force_refresh)
+        if doc is None:
+            return (f"❌ No se encontró cartola BCI para {period_r} en Yahoo ni MongoDB "
+                    f"(¿aún no enviada para ese mes?).")  # noqa: E501
+        if isinstance(doc, dict) and doc.get("error"):
+            return f"❌ Error IMAP: {doc['error']}\n\nUsa App Password de Yahoo."
+        src = "📦 MongoDB (cache)" if cache_hit else "⬇️ Yahoo (nueva)"
+        atts = doc.get("attachments", [])
+        lines = [
+            f"## Cartola BCI {period_r} — {src}\n",
+            f"**Asunto**: {doc.get('subject', '')}",
+            f"**De**: {doc.get('from_addr', '')}",
+            f"**Fecha**: {doc.get('fecha_remitente', doc.get('date_str', ''))}",
+        ]
+        if atts:
+            lines.append(f"\n**Adjuntos ({len(atts)})**:")
+            for a in atts:
+                lines.append(f"- `{a['filename']}` ({a['content_type']}, {a['size']} bytes, base64 en MongoDB)")
+        else:
+            lines.append("\n⚠️ Sin adjuntos PDF en este correo.")
+        lines.append(f"\n**Message-ID**: `{doc.get('message_id', '')}`")
+        return "\n".join(lines)
+
+    return await anyio.to_thread.run_sync(_blocking)
+
+
+def _do_sync_bci(months_back: int, force_refresh: bool) -> None:
+    """Trabajo pesado de sincronización. Corre en un hilo (no bloquea uvicorn)."""
+    today = date.today()
+    periods = []
+    for i in range(max(1, months_back)):
+        y, m = today.year, today.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        periods.append(f"{y:04d}-{m:02d}")
+
+    _update_sync_state(
+        running=True, current_period=periods[0], completed=0,
+        total=len(periods), started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None, last_error=None,
+    )
+    results = []
+    completed = 0
+    for period in periods:
+        _update_sync_state(current_period=period, completed=completed)
+        try:
+            doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
+            if doc is None:
+                results.append(f"- {period}: ❌ no encontrada")
+            elif isinstance(doc, dict) and doc.get("error"):
+                results.append(f"- {period}: ❌ error {doc['error']}")
+            else:
+                tag = "cache" if cache_hit else "nueva"
+                results.append(f"- {period}: ✅ {tag} ({len(doc.get('attachments', []))} adjuntos)")
+        except Exception as e:
+            results.append(f"- {period}: ❌ error {e}")
+            _update_sync_state(last_error=str(e))
+        completed += 1
+        _update_sync_state(completed=completed)
+    _update_sync_state(
+        running=False, current_period=None,
+        finished_at=datetime.now(timezone.utc).isoformat(),
+        last_summary="## Sync cartolas BCI\n" + "\n".join(results),
+    )
 
 
 @mcp.tool()
 def sync_bci_cartolas(months_back: int = 6, force_refresh: bool = False) -> str:
     """
-    Sincroniza las últimas N cartolas BCI (una por mes) a MongoDB.
-    Para cada mes hace cache-first: si ya existe en MongoDB la omite.
+    Sincroniza las últimas N cartolas BCI (una por mes) a MongoDB EN SEGUNDO PLANO.
+    Devuelve inmediatamente; el trabajo corre en un hilo sin bloquear el servidor.
+    Consulta el progreso con `get_bci_sync_status()` (no bloquea).
 
     Args:
         months_back: Cantidad de meses hacia atrás a sincronizar (default 6).
         force_refresh: Si True, re-descarga aunque existan en cache.
 
     Returns:
-        Resumen por mes de lo sincronizado.
+        Confirmación de que el sync en background inició.
     """
-    today = date.today()
-    results = []
-    for i in range(max(1, months_back)):
-        y, m = today.year, today.month - i
-        while m <= 0:
-            m += 12
-            y -= 1
-        period = f"{y:04d}-{m:02d}"
-        doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
-        if doc is None:
-            results.append(f"- {period}: ❌ no encontrada")
-        elif isinstance(doc, dict) and doc.get("error"):
-            results.append(f"- {period}: ❌ error {doc['error']}")
-        else:
-            tag = "cache" if cache_hit else "nueva"
-            results.append(f"- {period}: ✅ {tag} ({len(doc.get('attachments', []))} adjuntos)")
-    return "## Sync cartolas BCI\n" + "\n".join(results)
+    import anyio
+
+    state = _read_sync_state()
+    if state.get("running"):
+        return (f"⏳ Ya hay un sync BCI en curso (iniciado {state.get('started_at')}, "
+                 f"mes actual: {state.get('current_period')}, "
+                 f"{state.get('completed')}/{state.get('total')}). "
+                 f"Usa get_bci_sync_status() para ver progreso.")
+    # Lanza el trabajo pesado en un hilo del pool de anyio (no congela el event loop)
+    async def _launch():
+        await anyio.to_thread.run_sync(_do_sync_bci, months_back, force_refresh)
+    import asyncio
+    asyncio.create_task(_launch())
+    return (f"🚀 Sync BCI en background iniciado para {max(1, months_back)} meses "
+             f"(force_refresh={force_refresh}). Consulta con get_bci_sync_status().")
+
+
+@mcp.tool()
+def get_bci_sync_status() -> str:
+    """
+    Estado actual de la sincronización de cartolas BCI (background).
+    No toca Yahoo ni el PDF: lectura instantánea del estado persistido.
+
+    Returns:
+        Estado: corriendo / terminado, mes actual, progreso y último error.
+    """
+    s = _read_sync_state()
+    running = s.get("running")
+    lines = ["## Estado sync BCI cartolas\n"]
+    if running:
+        lines.append(f"**Estado**: 🔄 EN CURSO")
+        lines.append(f"**Mes actual**: {s.get('current_period')}")
+        lines.append(f"**Progreso**: {s.get('completed')}/{s.get('total')}")
+        lines.append(f"**Iniciado**: {s.get('started_at')}")
+    else:
+        lines.append("**Estado**: ✅ terminado (o inactivo)")
+        if s.get("finished_at"):
+            lines.append(f"**Terminó**: {s.get('finished_at')}")
+        lines.append(f"**Último progreso**: {s.get('completed')}/{s.get('total')}")
+    if s.get("last_error"):
+        lines.append(f"**Último error**: {s.get('last_error')}")
+    if s.get("last_summary"):
+        lines.append("\n" + s["last_summary"])
+    return "\n".join(lines)
 
 
 @mcp.tool()

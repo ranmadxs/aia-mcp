@@ -5,6 +5,23 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.8] — 2026-07-14
+
+### Mejorado (no bloqueo del servidor de email)
+- **Opción A (background sync)**: `sync_bci_cartolas` ahora lanza el trabajo pesado
+  (fetch Yahoo + parse PDF) en un hilo vía `anyio.to_thread.run_sync` y devuelve
+  inmediatamente ("🚀 Sync BCI en background iniciado…"). No congela el event loop.
+- **Visibilidad**: nuevo tool `get_bci_sync_status()` que lee el estado persistido en
+  MongoDB (`email.sync_state`) de forma instantánea (sin tocar Yahoo ni el PDF): mes
+  actual, progreso `completed/total`, último error y resumen final. El estado se
+  persiste en Mongo para que cualquier worker pueda consultarlo.
+- **Opción C (workers)**: el server de email corre con `uvicorn.run(..., workers=N)`
+  (default 4 vía env `EMAIL_WORKERS`) para mayor concurrencia y tolerancia a tools
+  bloqueantes. Los demás servers quedan en 1 worker.
+- `get_bci_cartola` y `get_bci_cartola_ingresos` ahora son `async` y ejecutan su
+  lógica bloqueante en `anyio.to_thread.run_sync`, de modo que una descarga de Yahoo
+  no bloquea a otros agentes conectados al mismo puerto.
+
 ## [v1.7.7] — 2026-07-14
 
 ### Corregido

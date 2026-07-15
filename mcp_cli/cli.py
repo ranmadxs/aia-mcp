@@ -108,10 +108,17 @@ def _run_http_server(server_name: str) -> None:
         from mcp_cli.logging_middleware import RequestLoggingMiddleware
         app = mcp.streamable_http_app()
         app = RequestLoggingMiddleware(app, server_name=server_name)
+        # Opción C: workers múltiples para el server de email (mayor concurrencia
+        # y tolerancia a tools bloqueantes que corren en hilos). Los demás servers
+        # quedan en 1 worker para evitar duplicar estado en memoria.
+        workers = 1
+        if server_name == "email":
+            workers = int(os.environ.get("EMAIL_WORKERS", "4"))
         uvicorn.run(
             app,
             host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
             port=SERVER_PORTS[server_name],
+            workers=workers,
             log_level="warning",
         )
     except Exception as e:
