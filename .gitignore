@@ -142,6 +142,9 @@ ENV/
 env.bak/
 venv.bak/
 
+# Test artifacts
+test-report-ltp.txt
+
 # Spyder project settings
 .spyderproject
 .spyproject
