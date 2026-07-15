@@ -4,7 +4,8 @@ import base64
 from pathlib import Path
 
 import mcp_email.server as srv
-from mcp_email.server import _extract_movements
+from mcp_email.server import BCI_SENDER, _extract_movements
+from tests.test_email import _make_bci_email
 
 FIXTURE = Path(__file__).parent / "fixtures" / "cartola_bci_fixture_enc.pdf"
 PW = "17536222"
@@ -71,3 +72,75 @@ def test_get_bci_cartola_ingresos_tool_formato(monkeypatch):
     assert "INGRESOS" in result.upper() or "Ingresos" in result
     assert "100.000" in result  # formateado con puntos
     assert "200.000" in result
+
+
+def test_extract_period_from_pdf_deriva_mes_cierre():
+    """El período se deriva de la fecha de cierre del PDF (al DD-MM-YYYY)."""
+    period = srv._extract_period_from_pdf(_fixture_bytes(), PW)
+    assert period == "2026-07"
+
+
+def test_imap_search_bci_usa_mes_siguiente(monkeypatch):
+    """La búsqueda IMAP debe usar la fecha de recepción (mes siguiente)."""
+    captured = {}
+
+    def fake_imap_connect():
+        class _Mail:
+            def select(self, box):
+                return ("OK", [b"1"])
+
+            def search(self, *args):
+                captured["criteria"] = args[1:]
+                return ("OK", [b"1"])
+
+            def logout(self):
+                return ("OK", [b"bye"])
+
+        return _Mail()
+
+    monkeypatch.setattr(srv, "_imap_connect", fake_imap_connect)
+    srv._imap_search_bci("2026-02")
+    crit = " ".join(captured["criteria"])
+    assert srv.BCI_SENDER in crit
+    assert "SINCE" in crit and "BEFORE" in crit
+    # El mes siguiente a feb es marzo -> SINCE debe mencionar Mar
+    assert "Mar" in crit
+
+
+def test_fetch_bci_cartola_guarda_periodo_derivado(monkeypatch):
+    """Al guardar, el período debe derivarse del PDF, no del mes solicitado."""
+    # Email BCI con el PDF fixture (que dice período 2026-07) como adjunto.
+    msg = _make_bci_email("2026-07", with_pdf=False)
+    from email.mime.application import MIMEApplication
+    pdf = MIMEApplication(_fixture_bytes(), name="cartola.pdf")
+    pdf.add_header("Content-Disposition", "attachment", filename="cartola.pdf")
+    msg.attach(pdf)
+    raw = msg.as_bytes()
+
+    saved = {}
+
+    class _Col:
+        def find_one(self, filt, sort=None):
+            return None
+
+        def insert_one(self, doc):
+            saved["doc"] = doc
+
+    monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
+    monkeypatch.setattr(srv, "_imap_search_bci", lambda p: [b"1"])
+
+    class _Mail:
+        def select(self, box):
+            return ("OK", [b"1"])
+
+        def fetch(self, uid, parts):
+            return ("OK", [(None, raw)])
+
+        def logout(self):
+            return ("OK", [b"bye"])
+
+    monkeypatch.setattr(srv, "_imap_connect", lambda: _Mail())
+    monkeypatch.setattr(srv, "BCI_PDF_PASSWORD", PW)
+    doc, hit = srv._fetch_bci_cartola("2026-02")  # solicitado feb, PDF dice julio
+    assert hit is False
+    assert saved["doc"]["period"] == "2026-07"  # derivado del PDF

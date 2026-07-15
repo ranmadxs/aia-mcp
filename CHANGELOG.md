@@ -5,6 +5,12 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.7] — 2026-07-14
+
+### Corregido
+- Email MCP: el `period` de cache de la cartola BCI se deriva del CONTENIDO del PDF (`PERIODO : ... al DD-MM-YYYY`), no del mes solicitado ni de la fecha de recepción. Antes, la ventana IMAP amplia hacía que la cartola de febrero se guardara con movimientos de marzo. Ahora cada cartola se guarda con su mes real.
+- Email MCP: `_imap_search_bci` busca por fecha de recepción usando todo el mes siguiente (sin solapamiento entre meses contiguos).
+
 ## [v1.7.6] — 2026-07-14
 
 ### Corregido

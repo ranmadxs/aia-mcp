@@ -4,6 +4,7 @@ import base64
 import email as email_lib
 import imaplib
 import os
+import re
 import tomllib
 from datetime import date, datetime, timedelta, timezone
 from email.header import decode_header
@@ -432,11 +433,19 @@ def _resolve_period(period: str) -> str:
 
 
 def _imap_search_bci(period: str):
-    """Busca UIDs de correos de BCI en Yahoo para el período (ventana ampliada
-    para captar cartolas que llegan a inicios del mes siguiente)."""
+    """Busca UIDs de correos de BCI en Yahoo para el período.
+
+    BCI envía la cartola del mes X a inicios del mes X+1 (a veces con retraso
+    dentro de ese mes). Buscamos por la FECHA DE RECEPCIÓN del correo usando
+    todo el mes siguiente, lo que aísla cada cartola sin solapar con la del mes
+    siguiente (que se busca en X+2).
+    """
     y, m = (int(x) for x in period.split("-"))
-    since = date(y, m, 1) - timedelta(days=10)
-    before = (date(y, m + 1, 1) if m < 12 else date(y + 1, 1, 1)) + timedelta(days=40)
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+    since = date(ny, nm, 1)
+    # hasta el final del mes siguiente (día 1 del mes X+2)
+    ny2, nm2 = (ny + 1, 1) if nm == 12 else (ny, nm + 1)
+    before = date(ny2, nm2, 1)
     fmt = "%d-%b-%Y"
     mail = _imap_connect()
     mail.select("INBOX")
@@ -444,6 +453,25 @@ def _imap_search_bci(period: str):
     ids = msgs[0].split()
     mail.logout()
     return ids
+
+
+_PERIOD_RE = re.compile(r"al\s+(\d{2})-(\d{2})-(\d{4})")
+
+
+def _extract_period_from_pdf(pdf_bytes: bytes, password: str) -> str | None:
+    """Extrae el período real de la cartola desde el texto del PDF.
+
+    BCI imprime 'PERIODO : 22-06-2026 al 03-07-2026'. Usamos la fecha final
+    (el mes de cierre) como clave de cache 'YYYY-MM'.
+    """
+    with pdfplumber.open(__import__("io").BytesIO(pdf_bytes), password=password or "") as pdf:
+        for page in pdf.pages:
+            text = page.extract_text() or ""
+            m = _PERIOD_RE.search(text)
+            if m:
+                d, mo, y = m.groups()
+                return f"{y}-{mo}"
+    return None
 
 
 def _fetch_bci_cartola(period: str, force_refresh: bool = False):
@@ -470,7 +498,21 @@ def _fetch_bci_cartola(period: str, force_refresh: bool = False):
     if not data or data[0] is None:
         return None, False
     doc = _parse_email(email_lib.message_from_bytes(data[0][1]))
-    doc["period"] = period
+    # El período de cache se deriva del CONTENIDO del PDF (fecha de cierre de la
+    # cartola), no del mes solicitado ni de cuándo llegó el correo. Así la cartola
+    # de febrero siempre se guarda como 2026-02 aunque BCI la envíe en abril.
+    atts = doc.get("attachments", [])
+    real_period = period
+    if atts:
+        try:
+            import base64 as _b64
+            pdf_bytes = _b64.b64decode(atts[0]["data_b64"])
+            derived = _extract_period_from_pdf(pdf_bytes, BCI_PDF_PASSWORD)
+            if derived:
+                real_period = derived
+        except Exception:
+            pass
+    doc["period"] = real_period
     doc["kind"] = "bci_cartola"
     if col is not None:
         col.insert_one(doc)
