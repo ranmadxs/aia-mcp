@@ -181,34 +181,54 @@ def test_fetch_bci_cartola_force_refresh_ignora_cache(monkeypatch):
 
 
 def test_sync_emails_from_usa_search_by_from_y_dedup(monkeypatch):
-    """sync_emails_from busca por FROM en Yahoo y omite duplicados por message_id."""
+    """El motor genérico _do_sync busca por FROM y marca cartolas BCI."""
+    from email.mime.application import MIMEApplication
+    from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
 
-    def _mk(mid):
-        m = MIMEText("hola")
-        m["From"] = "viejo@x.com"
-        m["Subject"] = "antiguo"
+    def _mk(mid, frm, subject, with_pdf=False):
+        if with_pdf:
+            m = MIMEMultipart()
+            m.attach(MIMEText("hola"))
+            pdf = MIMEApplication(b"%PDF-1.4 cartola", name="cartola.pdf")
+            pdf.add_header("Content-Disposition", "attachment", filename="cartola.pdf")
+            m.attach(pdf)
+        else:
+            m = MIMEText("hola")
+        m["From"] = frm
+        m["Subject"] = subject
         m["Message-ID"] = mid
         return m.as_bytes()
 
-    raws = {b"10": _mk("<a@x.com>"), b"11": _mk("<b@x.com>"), b"12": _mk("<c@x.com>")}
+    raws = {
+        b"10": _mk("<a@x.com>", "viejo@x.com", "antiguo"),
+        b"11": _mk("<b@x.com>", "bcimail@bci.cl", "Cartola Cuenta Corriente", with_pdf=True),
+        b"12": _mk("<c@x.com>", "viejo@x.com", "otro"),
+    }
     seen = {"<a@x.com>"}  # ya existe en Mongo
 
     class _Col:
         def find_one(self, filt, sort=None):
             return {"message_id": filt["message_id"]} if filt["message_id"] in seen else None
 
-        def insert_one(self, doc):
-            _Col.inserted.append(doc["message_id"])
+        def update_one(self, filt, upd, upsert=False):
+            _Col.upserts.append((filt.get("message_id"), upd["$set"].get("kind")))
+            return None
 
-    _Col.inserted = []
+        @property
+        def database(self):
+            return self
+
+        def __getitem__(self, name):
+            return self
+
+    _Col.upserts = []
 
     class _Mail:
         def select(self, box):
             return ("OK", [b"1"])
 
         def search(self, *args):
-            # Debe usar FROM "viejo@x.com", no ALL
             assert 'FROM "viejo@x.com"' in args[1]
             return ("OK", [b"10 11 12"])
 
@@ -220,11 +240,11 @@ def test_sync_emails_from_usa_search_by_from_y_dedup(monkeypatch):
 
     monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
     monkeypatch.setattr(srv, "_imap_connect", lambda: _Mail())
+    monkeypatch.setattr(srv, "_extract_period_from_pdf", lambda pdf, pw: "2026-01")
 
-    import anyio
-    out = anyio.run(srv.sync_emails_from, "viejo@x.com", 500)
-    # 3 revisados: 1 duplicado (<a> ya existia), 2 nuevos (<b>,<c>)
-    assert "Revisados**: 3" in out
-    assert "Guardados**: 2" in out
-    assert "Duplicados**: 1" in out
-    assert _Col.inserted == ["<b@x.com>", "<c@x.com>"]
+    srv._do_sync('FROM "viejo@x.com"', "from", "viejo@x.com", 500)
+    # <a> duplicado (omitido), <b> cartola BCI (kind bci_cartola), <c> email
+    kinds = dict(_Col.upserts)
+    assert kinds.get("<b@x.com>") == "bci_cartola"
+    assert kinds.get("<c@x.com>") == "email"
+    assert "<a@x.com>" not in kinds  # duplicado no se reescribe

@@ -122,6 +122,34 @@ Resumen de la cartola 2026-04 (ingresos):
 
 ---
 
+## Motor de sincronización genérico (v1.7.11+)
+
+Desde v1.7.11 todas las variantes de sync usan **un solo motor** (`_do_sync`):
+
+- `sync_emails(limit)` — INBOX completo (últimos N).
+- `sync_emails_from(from_addr, limit)` — todos los correos de un remitente
+  (IMAP `SEARCH FROM`), sin límite de antigüedad.
+- `sync_bci_cartolas(months_back, force_refresh)` — cartolas BCI de los últimos N
+  meses (IMAP `FROM bcimail@bci.cl SUBJECT "Cartola" SINCE/BEFORE`).
+
+**Comportamiento común:**
+1. Descarga de Yahoo por IMAP en un hilo (`anyio.to_thread`, no bloquea).
+2. Por cada correo: si el `message_id` ya existe en Mongo → omitido (dedup).
+   Si es nuevo → `_classify_and_save` lo etiqueta:
+   - `kind:"bci_cartola"` si `from_addr` contiene `bcimail@bci.cl` **Y** el asunto
+     contiene "Cartola" (case-insensitive) **Y** trae adjunto PDF. El `period` se
+     deriva del PDF.
+   - `kind:"email"` en cualquier otro caso.
+   Guarda con `update_one({"message_id": mid}, {"$set": doc}, upsert=True)`.
+3. Progreso persistido en `email.sync_state` (`_id:"email_sync"`) con `mode`,
+   `scope`, `completed/total`. Se consulta con `get_email_sync_status()`
+   (instantáneo, sin tocar Yahoo).
+
+Esto garantiza que **cualquier** sync que traiga una cartola BCI la marque y
+guarde igual, sin replicar lógica ni duplicar documentos.
+
+---
+
 ## Notas de versión relevantes
 
 - **v1.7.7:** el `period` de cache se deriva del contenido del PDF
@@ -130,3 +158,5 @@ Resumen de la cartola 2026-04 (ingresos):
   cartola del mes X dentro del mes X) y filtra por asunto `Cuenta Corriente`.
   `_fetch_bci_cartola` usa `update_one(..., upsert=True)` por `message_id` para
   no duplicar en `force_refresh`.
+- **v1.7.11:** motor de sync único y genérico; detección de cartola por
+  remitente BCI + asunto "Cartola"; progreso unificado en `get_email_sync_status`.

@@ -178,144 +178,266 @@ def get_email_status() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
-def sync_emails(limit: int = 100) -> str:
-    """
-    Sincroniza los últimos N correos de Yahoo a MongoDB.
-    Solo guarda emails nuevos (detecta duplicados por Message-ID).
+# ── Motor de sincronización GENÉRICO (una sola implementación) ───────────────
+# Todas las variantes de sync (emails, cartolas BCI, por remitente) usan este
+# mismo motor: descarga de Yahoo por IMAP, guarda en Mongo con upsert por
+# message_id (sin duplicar) y marca como cartola BCI cuando el remitente es
+# BCI y el asunto dice "Cartola". El progreso se persiste en Mongo para
+# consultarlo sin bloquear (get_email_sync_status).
 
-    Args:
-        limit: Cantidad máxima de correos a sincronizar (default 100, max 1500).
+_SYNC_STATE_ID = "email_sync"  # doc único en email.sync_state
 
-    Returns:
-        Resumen de la sincronización: nuevos guardados, duplicados y errores.
-    """
-    limit = min(max(1, limit), 1500)
+
+def _sync_state_col():
     col = _get_collection()
     if col is None:
-        return "❌ MongoDB no disponible. Verifica MONGODB_URI en .env"
+        return None
+    return col.database["sync_state"]
 
+
+def _update_sync_state(**fields):
+    """Persiste el estado del sync en Mongo (doc _id='email_sync')."""
+    col = _sync_state_col()
+    if col is None:
+        return
+    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        col.update_one({"_id": _SYNC_STATE_ID}, {"$set": fields}, upsert=True)
+    except Exception:
+        pass
+
+
+def _read_sync_state() -> dict:
+    col = _sync_state_col()
+    if col is None:
+        return {"running": False, "mode": None, "scope": None, "completed": 0,
+                "total": 0, "last_error": None, "started_at": None,
+                "finished_at": None, "note": "MongoDB no disponible"}
+    try:
+        doc = col.find_one({"_id": _SYNC_STATE_ID})
+    except Exception:
+        doc = None
+    if not doc:
+        return {"running": False, "mode": None, "scope": None, "completed": 0,
+                "total": 0, "last_error": None, "started_at": None,
+                "finished_at": None}
+    doc.pop("_id", None)
+    return doc
+
+
+def _is_bci_cartola(doc: dict) -> bool:
+    """Un correo es cartola BCI si viene de bcimail@bci.cl y el asunto dice Cartola."""
+    from_addr = (doc.get("from_addr") or "").lower()
+    subj = (doc.get("subject") or "").upper()
+    return BCI_SENDER in from_addr and "CARTOLA" in subj
+
+
+def _classify_and_save(col, doc: dict) -> str:
+    """Etiqueta y guarda un correo en Mongo (upsert por message_id). Devuelve el kind."""
+    mid = doc.get("message_id")
+    if not mid:
+        col.insert_one(doc)
+        return doc.get("kind", "email")
+    atts = doc.get("attachments", [])
+    if _is_bci_cartola(doc) and atts:
+        try:
+            import base64 as _b64
+            pdf = _b64.b64decode(atts[0]["data_b64"])
+            derived = _extract_period_from_pdf(pdf, BCI_PDF_PASSWORD)
+            if derived:
+                doc["period"] = derived
+        except Exception:
+            pass
+        doc["kind"] = "bci_cartola"
+    else:
+        doc.setdefault("kind", "email")
+    col.update_one({"message_id": mid}, {"$set": doc}, upsert=True)
+    return doc["kind"]
+
+
+def _do_sync(search_criteria: str, mode: str, scope: str, limit: int) -> None:
+    """Motor único. `search_criteria` es el string IMAP SEARCH a usar."""
+    col = _get_collection()
+    if col is None:
+        return
+    _update_sync_state(
+        running=True, mode=mode, scope=scope, completed=0, total=0,
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=None, last_error=None,
+    )
     try:
         mail = _imap_connect()
-    except ValueError as e:
-        return f"❌ {e}"
-    except imaplib.IMAP4.error as e:
-        return f"❌ Error IMAP: {e}\n\nUsa App Password de Yahoo: https://login.yahoo.com/account/security"
-
-    try:
         mail.select("INBOX")
-        _, messages = mail.search(None, "ALL")
-        msg_ids = messages[0].split()[-limit:]
+        _, msgs = mail.search(None, search_criteria)
+        msg_ids = msgs[0].split()
+        if limit and limit > 0:
+            msg_ids = msg_ids[-limit:]
         total = len(msg_ids)
+        _update_sync_state(total=total)
 
-        inserted = duplicates = errors = 0
+        inserted = duplicates = errors = cartolas = 0
+        completed = 0
         for msg_id in msg_ids:
+            _update_sync_state(completed=completed)
             try:
                 _, data = mail.fetch(msg_id, "(RFC822)")
                 if not data or data[0] is None:
                     errors += 1
-                    continue
-                raw_msg = email_lib.message_from_bytes(data[0][1])
-                doc = _parse_email(raw_msg)
-                mid = doc.get("message_id")
-                if mid and col.find_one({"message_id": mid}):
-                    duplicates += 1
                 else:
-                    col.insert_one(doc)
-                    inserted += 1
-            except Exception:
-                errors += 1
-
-        mail.logout()
-    except Exception as e:
-        try:
-            mail.logout()
-        except Exception:
-            pass
-        return f"❌ Error durante sincronización: {e}"
-
-    return (
-        f"## Sincronización completada\n\n"
-        f"- **Revisados**: {total}\n"
-        f"- **Guardados**: {inserted} nuevos\n"
-        f"- **Duplicados**: {duplicates} (omitidos)\n"
-        f"- **Errores**: {errors}\n"
-    )
-
-
-@mcp.tool()
-async def sync_emails_from(from_addr: str, limit: int = 500) -> str:
-    """
-    Sincroniza a MongoDB todos los correos de UN remitente específico en Yahoo,
-    sin importar la antigüedad (usa IMAP SEARCH BY FROM, no 'últimos N').
-    Solo guarda los nuevos: omite los que ya existen (dedup por Message-ID).
-
-    Args:
-        from_addr: Remitente a buscar (ej: "bcimail@bci.cl", "banco@x.com").
-        limit: Máximo de correos a fetch'eer (los más recientes del remitente).
-               Default 500. Usa 0 para no capar (traer todos los encontrados).
-
-    Returns:
-        Resumen: revisados, nuevos guardados, duplicados omitidos y errores.
-    """
-    import anyio
-
-    if not from_addr:
-        return "❌ Debes indicar `from_addr` (remitente a sincronizar)."
-
-    def _blocking():
-        col = _get_collection()
-        if col is None:
-            return "❌ MongoDB no disponible. Verifica MONGODB_URI en .env"
-        try:
-            mail = _imap_connect()
-        except ValueError as e:
-            return f"❌ {e}"
-        except imaplib.IMAP4.error as e:
-            return f"❌ Error IMAP: {e}\n\nUsa App Password de Yahoo."
-        try:
-            mail.select("INBOX")
-            # Busca TODOS los UIDs de ese remitente, sin límite de antigüedad.
-            _, msgs = mail.search(None, f'FROM "{from_addr}"')
-            msg_ids = msgs[0].split()
-            if limit and limit > 0:
-                msg_ids = msg_ids[-limit:]
-            total = len(msg_ids)
-
-            inserted = duplicates = errors = 0
-            for msg_id in msg_ids:
-                try:
-                    _, data = mail.fetch(msg_id, "(RFC822)")
-                    if not data or data[0] is None:
-                        errors += 1
-                        continue
                     raw_msg = email_lib.message_from_bytes(data[0][1])
                     doc = _parse_email(raw_msg)
                     mid = doc.get("message_id")
                     if mid and col.find_one({"message_id": mid}):
                         duplicates += 1
                     else:
-                        col.insert_one(doc)
+                        kind = _classify_and_save(col, doc)
+                        if kind == "bci_cartola":
+                            cartolas += 1
                         inserted += 1
-                except Exception:
-                    errors += 1
-            mail.logout()
-        except Exception as e:
-            try:
-                mail.logout()
             except Exception:
-                pass
-            return f"❌ Error durante sincronización: {e}"
-
-        return (
-            f"## Sync por remitente: {from_addr}\n\n"
-            f"- **Revisados**: {total}\n"
-            f"- **Guardados**: {inserted} nuevos\n"
-            f"- **Duplicados**: {duplicates} (omitidos)\n"
-            f"- **Errores**: {errors}\n"
+                errors += 1
+            completed += 1
+            _update_sync_state(completed=completed)
+        mail.logout()
+        _update_sync_state(
+            running=False, scope=None,
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            last_summary=(f"## Sync {mode} ({scope})\n"
+                          f"- Revisados: {total}\n- Guardados: {inserted} "
+                          f"(cartolas BCI: {cartolas})\n- Duplicados: {duplicates}\n"
+                          f"- Errores: {errors}"),
+        )
+    except Exception as e:
+        _update_sync_state(
+            running=False, finished_at=datetime.now(timezone.utc).isoformat(),
+            last_error=str(e),
         )
 
-    return await anyio.to_thread.run_sync(_blocking)
+
+@mcp.tool()
+async def sync_emails(limit: int = 100) -> str:
+    """
+    Sincroniza los últimos N correos del INBOX de Yahoo a MongoDB (background).
+    Solo guarda los nuevos (dedup por Message-ID). Los correos de BCI con asunto
+    "Cartola" se marcan como cartola BCI automáticamente. Consulta con
+    get_email_sync_status().
+
+    Args:
+        limit: Cantidad máxima a sincronizar (default 100, max 1500).
+
+    Returns:
+        Confirmación de que el sync en background inició.
+    """
+    import anyio, asyncio
+    limit = min(max(1, limit), 1500)
+    if _read_sync_state().get("running"):
+        return "⏳ Ya hay un sync en curso. Usa get_email_sync_status()."
+    async def _launch():
+        await anyio.to_thread.run_sync(_do_sync, "ALL", "inbox", limit)
+    asyncio.create_task(_launch())
+    return f"🚀 Sync de {limit} correos del INBOX iniciado. Usa get_email_sync_status()."
+
+
+@mcp.tool()
+async def sync_emails_from(from_addr: str, limit: int = 500) -> str:
+    """
+    Sincroniza a MongoDB todos los correos de UN remitente en Yahoo, sin importar
+    la antigüedad (IMAP SEARCH BY FROM). Solo guarda los nuevos (dedup por
+    Message-ID). Los correos de BCI con asunto "Cartola" se marcan como cartola
+    BCI (period derivado del PDF). Corre en background; get_email_sync_status().
+
+    Args:
+        from_addr: Remitente a buscar (ej: "bcimail@bci.cl").
+        limit: Máximo a fetch'eer (los más recientes). 0 = sin cap.
+
+    Returns:
+        Confirmación de que el sync en background inició.
+    """
+    import anyio, asyncio
+    if not from_addr:
+        return "❌ Debes indicar `from_addr` (remitente a sincronizar)."
+    if _read_sync_state().get("running"):
+        return "⏳ Ya hay un sync en curso. Usa get_email_sync_status()."
+    criteria = f'FROM "{from_addr}"'
+    async def _launch():
+        await anyio.to_thread.run_sync(_do_sync, criteria, "from", from_addr, limit)
+    asyncio.create_task(_launch())
+    return f"🚀 Sync en background de '{from_addr}' iniciado. Usa get_email_sync_status()."
+
+
+@mcp.tool()
+async def sync_bci_cartolas(months_back: int = 6, force_refresh: bool = False) -> str:
+    """
+    Sincroniza las cartolas BCI (bcimail@bci.cl, asunto "Cartola") de los últimos
+    N meses a MongoDB, EN SEGUNDO PLANO. Usa el mismo motor genérico que los otros
+    sync: descarga de Yahoo, upsert por message_id (sin duplicar) y marca como
+    cartola BCI con period derivado del PDF. Consulta con get_email_sync_status().
+
+    Args:
+        months_back: Meses hacia atrás a sincronizar (default 6).
+        force_refresh: Si True, re-descarga aunque existan en cache.
+
+    Returns:
+        Confirmación de que el sync en background inició.
+    """
+    import anyio, asyncio
+    if _read_sync_state().get("running"):
+        return "⏳ Ya hay un sync en curso. Usa get_email_sync_status()."
+    today = date.today()
+    periods = []
+    for i in range(max(1, months_back)):
+        y, m = today.year, today.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        periods.append(f"{y:04d}-{m:02d}")
+    # Busca por remitente BCI + asunto Cartola en el rango de meses.
+    y0, m0 = (int(x) for x in periods[-1].split("-"))
+    y1, m1 = (int(x) for x in periods[0].split("-"))
+    ny0, nm0 = (y0, m0)
+    ny1, nm1 = (y1 + 1, 1) if m1 == 12 else (y1, m1 + 1)
+    since = date(ny0, nm0, 1).strftime("%d-%b-%Y")
+    before = date(ny1, nm1, 1).strftime("%d-%b-%Y")
+    criteria = f'FROM "{BCI_SENDER}" SUBJECT "Cartola" SINCE {since} BEFORE {before}'
+    if force_refresh:
+        # fuerza re-descarga: borra las cartolas del rango antes de sync
+        col = _get_collection()
+        if col is not None:
+            col.delete_many({"kind": "bci_cartola", "period": {"$in": periods}})
+    async def _launch():
+        await anyio.to_thread.run_sync(_do_sync, criteria, "bci", f"{periods[0]}..{periods[-1]}", 0)
+    asyncio.create_task(_launch())
+    return (f"🚀 Sync BCI en background para {max(1, months_back)} meses "
+             f"(force_refresh={force_refresh}). Usa get_email_sync_status().")
+
+
+@mcp.tool()
+def get_email_sync_status() -> str:
+    """
+    Estado del sync (cualquiera: inbox, por remitente o BCI) en background.
+    Lectura instantánea desde Mongo, sin tocar Yahoo. Muestra modo, progreso,
+    cartolas guardadas y último error.
+
+    Returns:
+        Estado actual de la sincronización.
+    """
+    s = _read_sync_state()
+    lines = ["## Estado sync de emails\n"]
+    if s.get("running"):
+        lines.append("**Estado**: 🔄 EN CURSO")
+        lines.append(f"**Modo**: {s.get('mode')}  |  **Alcance**: {s.get('scope')}")
+        lines.append(f"**Progreso**: {s.get('completed')}/{s.get('total')}")
+        lines.append(f"**Iniciado**: {s.get('started_at')}")
+    else:
+        lines.append("**Estado**: ✅ terminado (o inactivo)")
+        if s.get("finished_at"):
+            lines.append(f"**Terminó**: {s.get('finished_at')}")
+        lines.append(f"**Último progreso**: {s.get('completed')}/{s.get('total')}")
+    if s.get("last_error"):
+        lines.append(f"**Último error**: {s.get('last_error')}")
+    if s.get("last_summary"):
+        lines.append("\n" + s["last_summary"])
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -502,48 +624,6 @@ def get_email_stats() -> str:
 
 
 # ── Cartolas BCI (cache-first: MongoDB -> Yahoo) ─────────────────────────────
-
-# Estado de la sincronización en background. Se persiste en Mongo (email.sync_state)
-# para que sea consultable desde cualquier worker de uvicorn (Opción C: workers).
-_SYNC_STATE_COL = "sync_state"
-
-
-def _sync_state_col():
-    col = _get_collection()
-    if col is None:
-        return None
-    return col.database["sync_state"]
-
-
-def _update_sync_state(**fields):
-    """Actualiza el estado de sync en Mongo (documento único _id='bci')."""
-    col = _sync_state_col()
-    if col is None:
-        return
-    fields["updated_at"] = datetime.now(timezone.utc).isoformat()
-    try:
-        col.update_one({"_id": "bci"}, {"$set": fields}, upsert=True)
-    except Exception:
-        pass
-
-
-def _read_sync_state() -> dict:
-    col = _sync_state_col()
-    if col is None:
-        return {"running": False, "current_period": None, "completed": 0,
-                "total": 0, "last_error": None, "started_at": None,
-                "finished_at": None, "note": "MongoDB no disponible"}
-    try:
-        doc = col.find_one({"_id": "bci"})
-    except Exception:
-        doc = None
-    if not doc:
-        return {"running": False, "current_period": None, "completed": 0,
-                "total": 0, "last_error": None, "started_at": None,
-                "finished_at": None}
-    doc.pop("_id", None)
-    return doc
-
 
 def _resolve_period(period: str) -> str:
     return period or datetime.now(timezone.utc).strftime("%Y-%m")
@@ -821,107 +901,6 @@ async def get_bci_cartola(period: str = "", force_refresh: bool = False) -> str:
         return "\n".join(lines)
 
     return await anyio.to_thread.run_sync(_blocking)
-
-
-def _do_sync_bci(months_back: int, force_refresh: bool) -> None:
-    """Trabajo pesado de sincronización. Corre en un hilo (no bloquea uvicorn)."""
-    today = date.today()
-    periods = []
-    for i in range(max(1, months_back)):
-        y, m = today.year, today.month - i
-        while m <= 0:
-            m += 12
-            y -= 1
-        periods.append(f"{y:04d}-{m:02d}")
-
-    _update_sync_state(
-        running=True, current_period=periods[0], completed=0,
-        total=len(periods), started_at=datetime.now(timezone.utc).isoformat(),
-        finished_at=None, last_error=None,
-    )
-    results = []
-    completed = 0
-    for period in periods:
-        _update_sync_state(current_period=period, completed=completed)
-        try:
-            doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
-            if doc is None:
-                results.append(f"- {period}: ❌ no encontrada")
-            elif isinstance(doc, dict) and doc.get("error"):
-                results.append(f"- {period}: ❌ error {doc['error']}")
-            else:
-                tag = "cache" if cache_hit else "nueva"
-                results.append(f"- {period}: ✅ {tag} ({len(doc.get('attachments', []))} adjuntos)")
-        except Exception as e:
-            results.append(f"- {period}: ❌ error {e}")
-            _update_sync_state(last_error=str(e))
-        completed += 1
-        _update_sync_state(completed=completed)
-    _update_sync_state(
-        running=False, current_period=None,
-        finished_at=datetime.now(timezone.utc).isoformat(),
-        last_summary="## Sync cartolas BCI\n" + "\n".join(results),
-    )
-
-
-@mcp.tool()
-def sync_bci_cartolas(months_back: int = 6, force_refresh: bool = False) -> str:
-    """
-    Sincroniza las últimas N cartolas BCI (una por mes) a MongoDB EN SEGUNDO PLANO.
-    Devuelve inmediatamente; el trabajo corre en un hilo sin bloquear el servidor.
-    Consulta el progreso con `get_bci_sync_status()` (no bloquea).
-
-    Args:
-        months_back: Cantidad de meses hacia atrás a sincronizar (default 6).
-        force_refresh: Si True, re-descarga aunque existan en cache.
-
-    Returns:
-        Confirmación de que el sync en background inició.
-    """
-    import anyio
-
-    state = _read_sync_state()
-    if state.get("running"):
-        return (f"⏳ Ya hay un sync BCI en curso (iniciado {state.get('started_at')}, "
-                 f"mes actual: {state.get('current_period')}, "
-                 f"{state.get('completed')}/{state.get('total')}). "
-                 f"Usa get_bci_sync_status() para ver progreso.")
-    # Lanza el trabajo pesado en un hilo del pool de anyio (no congela el event loop)
-    async def _launch():
-        await anyio.to_thread.run_sync(_do_sync_bci, months_back, force_refresh)
-    import asyncio
-    asyncio.create_task(_launch())
-    return (f"🚀 Sync BCI en background iniciado para {max(1, months_back)} meses "
-             f"(force_refresh={force_refresh}). Consulta con get_bci_sync_status().")
-
-
-@mcp.tool()
-def get_bci_sync_status() -> str:
-    """
-    Estado actual de la sincronización de cartolas BCI (background).
-    No toca Yahoo ni el PDF: lectura instantánea del estado persistido.
-
-    Returns:
-        Estado: corriendo / terminado, mes actual, progreso y último error.
-    """
-    s = _read_sync_state()
-    running = s.get("running")
-    lines = ["## Estado sync BCI cartolas\n"]
-    if running:
-        lines.append(f"**Estado**: 🔄 EN CURSO")
-        lines.append(f"**Mes actual**: {s.get('current_period')}")
-        lines.append(f"**Progreso**: {s.get('completed')}/{s.get('total')}")
-        lines.append(f"**Iniciado**: {s.get('started_at')}")
-    else:
-        lines.append("**Estado**: ✅ terminado (o inactivo)")
-        if s.get("finished_at"):
-            lines.append(f"**Terminó**: {s.get('finished_at')}")
-        lines.append(f"**Último progreso**: {s.get('completed')}/{s.get('total')}")
-    if s.get("last_error"):
-        lines.append(f"**Último error**: {s.get('last_error')}")
-    if s.get("last_summary"):
-        lines.append("\n" + s["last_summary"])
-    return "\n".join(lines)
 
 
 @mcp.tool()

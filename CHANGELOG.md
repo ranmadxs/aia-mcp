@@ -5,6 +5,25 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.11] — 2026-07-15
+
+### Refactor: motor de sincronización único y genérico
+- **Un solo motor** (`_do_sync`) para todas las variantes de sync: `sync_emails`
+  (INBOX), `sync_emails_from` (por remitente) y `sync_bci_cartolas` (cartolas BCI).
+  Antes cada uno tenía su propia lógica duplicada.
+- **Detección genérica de cartola**: un correo se marca como `kind:"bci_cartola"`
+  si su remitente es `bcimail@bci.cl` **Y** el asunto contiene "Cartola" (case
+  insensitive). El `period` se deriva del PDF igual que antes. Aplica a cualquier
+  sync que traiga ese correo (no solo a `sync_bci_cartolas`).
+- **Sin duplicados**: todas usan upsert por `message_id` (no `insert_one`).
+- **Progreso unificado**: un solo estado en `email.sync_state` (`_id:"email_sync"`)
+  con `mode` (inbox/from/bci), `scope`, `completed/total`. Se consulta con
+  `get_email_sync_status()` (instantáneo, sin tocar Yahoo). Las tools `sync_*`
+  son `async` y lanzan el trabajo en `anyio.to_thread` (no bloquean el server).
+- Eliminados `get_bci_sync_status`, `_do_sync_bci` y las funciones de estado
+  duplicadas (`_id:"bci"`). `sync_bci_cartolas` ahora busca por
+  `FROM bcimail@bci.cl SUBJECT "Cartola" SINCE/BEFORE` en el rango de meses.
+
 ## [v1.7.10] — 2026-07-15
 
 ### Agregado

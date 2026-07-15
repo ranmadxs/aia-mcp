@@ -109,8 +109,8 @@ def test_imap_search_bci_usa_mes_correcto(monkeypatch):
     assert "Feb" in crit
 
 
-def test_get_bci_sync_status_lee_estado(monkeypatch):
-    """get_bci_sync_status debe leer el estado persistido sin tocar Yahoo."""
+def test_get_email_sync_status_lee_estado(monkeypatch):
+    """get_email_sync_status (motor genérico) lee el estado sin tocar Yahoo."""
 
     class _DB:
         def __getitem__(self, name):
@@ -118,8 +118,9 @@ def test_get_bci_sync_status_lee_estado(monkeypatch):
 
     class _Col:
         def find_one(self, filt, sort=None):
-            return {"_id": "bci", "running": True, "current_period": "2026-07",
-                    "completed": 3, "total": 7, "started_at": "t", "finished_at": None}
+            return {"_id": "email_sync", "running": True, "mode": "bci",
+                    "scope": "2026-07..2026-01", "completed": 3, "total": 7,
+                    "started_at": "t", "finished_at": None}
 
         def update_one(self, q, u, upsert=False):
             return None
@@ -129,10 +130,10 @@ def test_get_bci_sync_status_lee_estado(monkeypatch):
             return _DB()
 
     monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
-    out = srv.get_bci_sync_status()
+    out = srv.get_email_sync_status()
     assert "EN CURSO" in out
-    assert "2026-07" in out
     assert "3/7" in out
+    assert "bci" in out
 
 
 def test_fetch_bci_cartola_guarda_periodo_derivado(monkeypatch):
