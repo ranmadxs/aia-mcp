@@ -21,6 +21,12 @@ jobs:
         run: poetry install --no-root --with dev
       - name: Run unit tests
         run: poetry run pytest -v
+      - name: Upload LTP test report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-report-ltp
+          path: test-report-ltp.txt
 
   # ── Build: construye la imagen (SIN push) ──────────────────────────────────
   build:

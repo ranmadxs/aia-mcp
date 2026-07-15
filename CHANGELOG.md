@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.4] — 2026-07-14
+
+### Añadido
+- CI: informe de tests estilo LTP (`tests/conftest.py`) que imprime tabla `Test | Result` + resumen `Total/Passed/Failed/Skipped/Error` y lo sube como artefacto `test-report-ltp` en el job `test`.
+
 ## [v1.7.3] — 2026-07-14
 
 ### Añadido
