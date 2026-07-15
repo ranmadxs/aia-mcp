@@ -5,6 +5,17 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.10] — 2026-07-15
+
+### Agregado
+- Email MCP: nuevo tool `sync_emails_from(from_addr, limit=500)` que sincroniza a
+  MongoDB **todos los correos de un remitente específico** en Yahoo, sin importar
+  la antigüedad. A diferencia de `sync_emails` (que usa `SEARCH ALL` y solo ve los
+  últimos N del INBOX), este usa `SEARCH FROM "remitente"`, que devuelve TODOS los
+  UIDs de ese remitente aunque tengan 20 años. Solo guarda los nuevos: omite los
+  que ya existen (dedup por `message_id`). Corre en `anyio.to_thread.run_sync`
+  (no bloquea el event loop). `limit=0` trae todos los encontrados sin capar.
+
 ## [v1.7.9] — 2026-07-14
 
 ### Corregido (consistencia de cartolas BCI)

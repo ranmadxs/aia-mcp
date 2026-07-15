@@ -244,6 +244,81 @@ def sync_emails(limit: int = 100) -> str:
 
 
 @mcp.tool()
+async def sync_emails_from(from_addr: str, limit: int = 500) -> str:
+    """
+    Sincroniza a MongoDB todos los correos de UN remitente específico en Yahoo,
+    sin importar la antigüedad (usa IMAP SEARCH BY FROM, no 'últimos N').
+    Solo guarda los nuevos: omite los que ya existen (dedup por Message-ID).
+
+    Args:
+        from_addr: Remitente a buscar (ej: "bcimail@bci.cl", "banco@x.com").
+        limit: Máximo de correos a fetch'eer (los más recientes del remitente).
+               Default 500. Usa 0 para no capar (traer todos los encontrados).
+
+    Returns:
+        Resumen: revisados, nuevos guardados, duplicados omitidos y errores.
+    """
+    import anyio
+
+    if not from_addr:
+        return "❌ Debes indicar `from_addr` (remitente a sincronizar)."
+
+    def _blocking():
+        col = _get_collection()
+        if col is None:
+            return "❌ MongoDB no disponible. Verifica MONGODB_URI en .env"
+        try:
+            mail = _imap_connect()
+        except ValueError as e:
+            return f"❌ {e}"
+        except imaplib.IMAP4.error as e:
+            return f"❌ Error IMAP: {e}\n\nUsa App Password de Yahoo."
+        try:
+            mail.select("INBOX")
+            # Busca TODOS los UIDs de ese remitente, sin límite de antigüedad.
+            _, msgs = mail.search(None, f'FROM "{from_addr}"')
+            msg_ids = msgs[0].split()
+            if limit and limit > 0:
+                msg_ids = msg_ids[-limit:]
+            total = len(msg_ids)
+
+            inserted = duplicates = errors = 0
+            for msg_id in msg_ids:
+                try:
+                    _, data = mail.fetch(msg_id, "(RFC822)")
+                    if not data or data[0] is None:
+                        errors += 1
+                        continue
+                    raw_msg = email_lib.message_from_bytes(data[0][1])
+                    doc = _parse_email(raw_msg)
+                    mid = doc.get("message_id")
+                    if mid and col.find_one({"message_id": mid}):
+                        duplicates += 1
+                    else:
+                        col.insert_one(doc)
+                        inserted += 1
+                except Exception:
+                    errors += 1
+            mail.logout()
+        except Exception as e:
+            try:
+                mail.logout()
+            except Exception:
+                pass
+            return f"❌ Error durante sincronización: {e}"
+
+        return (
+            f"## Sync por remitente: {from_addr}\n\n"
+            f"- **Revisados**: {total}\n"
+            f"- **Guardados**: {inserted} nuevos\n"
+            f"- **Duplicados**: {duplicates} (omitidos)\n"
+            f"- **Errores**: {errors}\n"
+        )
+
+    return await anyio.to_thread.run_sync(_blocking)
+
+
+@mcp.tool()
 def search_emails(
     query: str = "",
     from_addr: str = "",

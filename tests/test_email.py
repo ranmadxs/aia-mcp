@@ -178,3 +178,53 @@ def test_fetch_bci_cartola_force_refresh_ignora_cache(monkeypatch):
     doc, hit = _fetch_bci_cartola(period, force_refresh=True)
     assert hit is False
     assert doc["period"] == period
+
+
+def test_sync_emails_from_usa_search_by_from_y_dedup(monkeypatch):
+    """sync_emails_from busca por FROM en Yahoo y omite duplicados por message_id."""
+    from email.mime.text import MIMEText
+
+    def _mk(mid):
+        m = MIMEText("hola")
+        m["From"] = "viejo@x.com"
+        m["Subject"] = "antiguo"
+        m["Message-ID"] = mid
+        return m.as_bytes()
+
+    raws = {b"10": _mk("<a@x.com>"), b"11": _mk("<b@x.com>"), b"12": _mk("<c@x.com>")}
+    seen = {"<a@x.com>"}  # ya existe en Mongo
+
+    class _Col:
+        def find_one(self, filt, sort=None):
+            return {"message_id": filt["message_id"]} if filt["message_id"] in seen else None
+
+        def insert_one(self, doc):
+            _Col.inserted.append(doc["message_id"])
+
+    _Col.inserted = []
+
+    class _Mail:
+        def select(self, box):
+            return ("OK", [b"1"])
+
+        def search(self, *args):
+            # Debe usar FROM "viejo@x.com", no ALL
+            assert 'FROM "viejo@x.com"' in args[1]
+            return ("OK", [b"10 11 12"])
+
+        def fetch(self, uid, parts):
+            return ("OK", [(None, raws[uid])])
+
+        def logout(self):
+            return ("OK", [b"bye"])
+
+    monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
+    monkeypatch.setattr(srv, "_imap_connect", lambda: _Mail())
+
+    import anyio
+    out = anyio.run(srv.sync_emails_from, "viejo@x.com", 500)
+    # 3 revisados: 1 duplicado (<a> ya existia), 2 nuevos (<b>,<c>)
+    assert "Revisados**: 3" in out
+    assert "Guardados**: 2" in out
+    assert "Duplicados**: 1" in out
+    assert _Col.inserted == ["<b@x.com>", "<c@x.com>"]
