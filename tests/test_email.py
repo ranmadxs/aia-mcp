@@ -273,3 +273,38 @@ def test_sync_emails_since_construye_search_since(monkeypatch):
     assert "SINCE" in captured["criteria"] and "BEFORE" in captured["criteria"]
     assert "01-Dec-2025" in captured["criteria"]
     assert "15-Jul-2026" in captured["criteria"]
+
+
+def test_fetch_one_reintenta_y_reconecta_en_error_ssl(monkeypatch):
+    """_fetch_one reintenta y reconecta ante SSL BAD_LENGTH."""
+    class _SSLBad(Exception):
+        pass
+
+    class _BadMail:
+        def __init__(self):
+            self.calls = 0
+        def fetch(self, uid, parts):
+            self.calls += 1
+            raise _SSLBad("SSL: BAD_LENGTH")  # siempre falla
+        def logout(self):
+            pass
+
+    class _GoodMail:
+        def __init__(self):
+            self.calls = 0
+        def fetch(self, uid, parts):
+            self.calls += 1
+            return ("OK", [(None, b"From: x@y.com\nSubject: a\nMessage-ID: <m@x>\n\n")])
+        def logout(self):
+            pass
+
+    bad = _BadMail()
+    good = _GoodMail()
+    monkeypatch.setattr(srv, "_imap_connect", lambda: good)
+    # El fetch original falla (SSL), _fetch_one reconecta y reintenta con good.
+    raw = srv._fetch_one(bad, b"1")
+    assert raw is not None
+    assert b"Message-ID" in raw
+    # El mail original falla 1 vez, y tras reconectar el bueno se usa 1 vez
+    assert bad.calls == 1
+    assert good.calls == 1

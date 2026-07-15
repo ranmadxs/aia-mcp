@@ -140,6 +140,37 @@ def _imap_connect():
     return mail
 
 
+def _safe_logout(mail):
+    try:
+        if mail:
+            mail.logout()
+    except Exception:
+        pass
+
+
+def _fetch_one(mail, msg_id, retries: int = 3):
+    """Fetch de un mensaje con reintentos ante error de socket/SSL.
+    Devuelve los bytes RFC822 o None. Ante error persistente, reconecta."""
+    last_err = None
+    for attempt in range(retries):
+        try:
+            _, data = mail.fetch(msg_id, "(RFC822)")
+            if data and data[0] is not None:
+                return data[0][1]
+        except Exception as e:  # SSL BAD_LENGTH, socket error, etc.
+            last_err = e
+            try:
+                mail.logout()
+            except Exception:
+                pass
+            try:
+                mail = _imap_connect()
+                mail.select("INBOX")
+            except Exception:
+                pass
+    return None, last_err
+
+
 # ── MCP Tools ────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -280,11 +311,11 @@ def _do_sync(search_criteria: str, mode: str, scope: str, limit: int) -> None:
         for msg_id in msg_ids:
             _update_sync_state(completed=completed)
             try:
-                _, data = mail.fetch(msg_id, "(RFC822)")
-                if not data or data[0] is None:
+                raw = _fetch_one(mail, msg_id)
+                if raw is None:
                     errors += 1
                 else:
-                    raw_msg = email_lib.message_from_bytes(data[0][1])
+                    raw_msg = email_lib.message_from_bytes(raw)
                     doc = _parse_email(raw_msg)
                     mid = doc.get("message_id")
                     if mid and col.find_one({"message_id": mid}):
@@ -298,7 +329,7 @@ def _do_sync(search_criteria: str, mode: str, scope: str, limit: int) -> None:
                 errors += 1
             completed += 1
             _update_sync_state(completed=completed)
-        mail.logout()
+        _safe_logout(mail)
         _update_sync_state(
             running=False, scope=None,
             finished_at=datetime.now(timezone.utc).isoformat(),

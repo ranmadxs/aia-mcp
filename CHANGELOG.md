@@ -5,6 +5,18 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.8.2] — 2026-07-15
+
+### Corregido
+- **Resiliencia del sync ante `SSL: BAD_LENGTH`**: el motor unificado `_do_sync`
+  moría a mitad de un rango grande (Yahoo IMAP) con
+  `socket error: [SSL: BAD_LENGTH] bad length`. Ahora el fetch de cada mensaje
+  pasa por `_fetch_one`, que reintenta (3 intentos) y **reconecta IMAP** ante
+  errores de socket/SSL, continuando con el resto de UIDs. El sync ya no se
+  aborta por una caída transitoria de la conexión; los ~515 correos faltantes del
+  rango dic-2025→jul-2026 se descargan en el reintento (dedup por `message_id`
+  salta los ~485 ya guardados).
+
 ## [v1.8.1] — 2026-07-15
 
 ### Corregido
