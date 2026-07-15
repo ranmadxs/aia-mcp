@@ -81,8 +81,8 @@ def test_extract_period_from_pdf_deriva_mes_cierre():
     assert period == "2026-07"
 
 
-def test_imap_search_bci_usa_mes_siguiente(monkeypatch):
-    """La búsqueda IMAP debe usar la fecha de recepción (mes siguiente)."""
+def test_imap_search_bci_usa_mes_correcto(monkeypatch):
+    """La búsqueda IMAP debe usar el mes del período (BCI envía dentro del mes X)."""
     captured = {}
 
     def fake_imap_connect():
@@ -103,9 +103,10 @@ def test_imap_search_bci_usa_mes_siguiente(monkeypatch):
     srv._imap_search_bci("2026-02")
     crit = " ".join(captured["criteria"])
     assert srv.BCI_SENDER in crit
+    assert "Cuenta Corriente" in crit
     assert "SINCE" in crit and "BEFORE" in crit
-    # El mes siguiente a feb es marzo -> SINCE debe mencionar Mar
-    assert "Mar" in crit
+    # BCI envía la cartola de feb dentro de feb -> SINCE debe mencionar Feb
+    assert "Feb" in crit
 
 
 def test_get_bci_sync_status_lee_estado(monkeypatch):
@@ -150,8 +151,8 @@ def test_fetch_bci_cartola_guarda_periodo_derivado(monkeypatch):
         def find_one(self, filt, sort=None):
             return None
 
-        def insert_one(self, doc):
-            saved["doc"] = doc
+        def update_one(self, filt, upd, upsert=False):
+            saved["doc"] = upd["$set"]
 
     monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
     monkeypatch.setattr(srv, "_imap_search_bci", lambda p: [b"1"])

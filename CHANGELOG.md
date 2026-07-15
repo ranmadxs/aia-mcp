@@ -5,6 +5,20 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.9] — 2026-07-14
+
+### Corregido (consistencia de cartolas BCI)
+- Email MCP: `_imap_search_bci` buscaba la cartola del mes X en el mes **siguiente**,
+  pero BCI envía la cartola del mes X **dentro del mes X** (ej. 2026-01 recibida
+  2026-01-21, 2026-07 el 2026-07-05). Ahora busca en el mes del período y filtra por
+  asunto `Cuenta Corriente` para descartar las `Cartola Trimestral Consumo` del mismo
+  remitente. Antes, pedir "2026-01" devolvía la cartola 2026-02.
+- Email MCP: `_fetch_bci_cartola` ahora hace `update_one(..., upsert=True)` por
+  `message_id` en vez de `insert_one`. Así `force_refresh=True` reescribe el doc en
+  vez de crear duplicados (se habían acumulado 5 duplicados idénticos por message_id).
+- Limpieza en nara: eliminados 5 duplicados; descargada la cartola 2026-01 faltante.
+  Ahora 7 cartolas (2026-01 a 2026-07), una por mes.
+
 ## [v1.7.8] — 2026-07-14
 
 ### Mejorado (no bloqueo del servidor de email)

@@ -109,8 +109,8 @@ def test_fetch_bci_cartola_cache_first(monkeypatch):
             assert filt["period"] == period
             return cached
 
-        def insert_one(self, doc):
-            raise AssertionError("no debe insertar en cache hit")
+        def update_one(self, filt, upd, upsert=False):
+            raise AssertionError("no debe escribir en cache hit")
 
     monkeypatch.setattr(srv, "_get_collection", lambda: _Col())
     monkeypatch.setattr(srv, "_imap_search_bci", lambda p: calls.__setitem__("imap", 1) or [b"1"])
@@ -130,8 +130,8 @@ def test_fetch_bci_cartola_descarga_si_no_hay_cache(monkeypatch):
         def find_one(self, filt, sort=None):
             return None  # miss
 
-        def insert_one(self, doc):
-            _Col.saved = doc
+        def update_one(self, filt, upd, upsert=False):
+            _Col.saved = upd["$set"]
             return None
 
     monkeypatch.setattr(srv, "_get_collection", lambda: _Col())

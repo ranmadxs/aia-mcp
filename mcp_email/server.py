@@ -477,21 +477,24 @@ def _resolve_period(period: str) -> str:
 def _imap_search_bci(period: str):
     """Busca UIDs de correos de BCI en Yahoo para el período.
 
-    BCI envía la cartola del mes X a inicios del mes X+1 (a veces con retraso
-    dentro de ese mes). Buscamos por la FECHA DE RECEPCIÓN del correo usando
-    todo el mes siguiente, lo que aísla cada cartola sin solapar con la del mes
-    siguiente (que se busca en X+2).
+    BCI envía la cartola del mes X DENTRO del mes X (observado: 2026-01 recibida
+    2026-01-21, 2026-02 el 2026-02-23, 2026-07 el 2026-07-05). Buscamos por la
+    FECHA DE RECEPCIÓN del correo usando TODO el mes X, filtrando por asunto
+    "Cuenta Corriente" para descartar las "Cartola Trimestral Consumo" del mismo
+    remitente.
     """
     y, m = (int(x) for x in period.split("-"))
+    since = date(y, m, 1)
     ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
-    since = date(ny, nm, 1)
-    # hasta el final del mes siguiente (día 1 del mes X+2)
-    ny2, nm2 = (ny + 1, 1) if nm == 12 else (ny, nm + 1)
-    before = date(ny2, nm2, 1)
+    before = date(ny, nm, 1)
     fmt = "%d-%b-%Y"
     mail = _imap_connect()
     mail.select("INBOX")
-    _, msgs = mail.search(None, f'FROM "{BCI_SENDER}" SINCE {since.strftime(fmt)} BEFORE {before.strftime(fmt)}')
+    _, msgs = mail.search(
+        None,
+        f'FROM "{BCI_SENDER}" SUBJECT "Cuenta Corriente" '
+        f'SINCE {since.strftime(fmt)} BEFORE {before.strftime(fmt)}',
+    )
     ids = msgs[0].split()
     mail.logout()
     return ids
@@ -557,7 +560,12 @@ def _fetch_bci_cartola(period: str, force_refresh: bool = False):
     doc["period"] = real_period
     doc["kind"] = "bci_cartola"
     if col is not None:
-        col.insert_one(doc)
+        # Upsert por message_id: force_refresh reescribe en vez de duplicar.
+        col.update_one(
+            {"message_id": doc.get("message_id")},
+            {"$set": doc},
+            upsert=True,
+        )
     return doc, False
 
 
