@@ -5,6 +5,18 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.8.1] — 2026-07-15
+
+### Corregido
+- **Bug crítico del MCP HTTP del email**: `mcp_cli/cli.py` levantaba el server de
+  email con `workers=4` (Opción C de v1.7.8). Streamable HTTP guarda el estado de
+  sesión en memoria del proceso; con workers>1 uvicorn spawnea procesos separados
+  y el session manager no se comparte, causando "Connection reset by peer" en el
+  handshake (`initialize`). Ahora el email MCP (y todos) corre con **1 worker**
+  (`EMAIL_WORKERS` default 1). La concurrencia la aporta el thread pool de anyio
+  (tools bloqueantes en `to_thread`), no los workers. El MCP HTTP vuelve a
+  responder y permite llamar `sync_emails_since` y `get_email_sync_status`.
+
 ## [v1.8.0] — 2026-07-15
 
 > **Salto de MINOR** (antes veníamos haciendo cambios de funcionalidad como patch

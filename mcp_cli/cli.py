@@ -108,12 +108,14 @@ def _run_http_server(server_name: str) -> None:
         from mcp_cli.logging_middleware import RequestLoggingMiddleware
         app = mcp.streamable_http_app()
         app = RequestLoggingMiddleware(app, server_name=server_name)
-        # Opción C: workers múltiples para el server de email (mayor concurrencia
-        # y tolerancia a tools bloqueantes que corren en hilos). Los demás servers
-        # quedan en 1 worker para evitar duplicar estado en memoria.
-        workers = 1
-        if server_name == "email":
-            workers = int(os.environ.get("EMAIL_WORKERS", "4"))
+        # NOTA: streamable HTTP mantiene el estado de sesión en memoria del
+        # proceso. Con workers>1 uvicorn spawnea procesos separados y el
+        # session manager no se comparte -> "Connection reset" en el handshake.
+        # Por eso SIEMPRE usamos 1 worker. La concurrencia la da el thread pool
+        # de anyio (los tools bloqueantes corren en to_thread), no los workers.
+        workers = int(os.environ.get("EMAIL_WORKERS", "1"))
+        if workers < 1:
+            workers = 1
         uvicorn.run(
             app,
             host=os.environ.get("FASTMCP_HOST", DEFAULT_HTTP_HOST),
