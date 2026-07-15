@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.6] — 2026-07-14
+
+### Corregido
+- CI: `BCI_PDF_PASSWORD` corregido al RUT real de la cuenta (`17536222`, sin dígito verificador). El deploy v1.7.5 usaba `175362223` y fallaba al abrir el PDF cifrado de la cartola.
+
 ## [v1.7.5] — 2026-07-14
 
 ### Añadido
