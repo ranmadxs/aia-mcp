@@ -5,6 +5,11 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.2] — 2026-07-14
+
+### Cambiado
+- CI: `deploy-nara` inyecta `YAHOO_EMAIL`, `YAHOO_APP_PASSWORD` y `MONGODB_URI` al contenedor vía GitHub Actions secrets, para habilitar el servidor de email (Yahoo IMAP) en nara.
+
 ## [v1.7.1] — 2026-07-14
 
 ### Cambiado

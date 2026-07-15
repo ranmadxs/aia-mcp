@@ -99,6 +99,9 @@ jobs:
             -v /opt/aia-mcp/logs:/app/logs \
             -v /opt/aia-mcp/.aia:/app/.aia \
             -e FASTMCP_HOST=0.0.0.0 -e FASTMCP_LOG_LEVEL=INFO \
+            -e YAHOO_EMAIL="${{ secrets.YAHOO_EMAIL }}" \
+            -e YAHOO_APP_PASSWORD="${{ secrets.YAHOO_APP_PASSWORD }}" \
+            -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
             "$IMAGE"
           echo "Despliegue en nara completado (imagen: $IMAGE)"
 
