@@ -5,6 +5,14 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.7.5] — 2026-07-14
+
+### Añadido
+- Email MCP: `get_bci_cartola_ingresos(period, rut_password, force_refresh)` extrae solo los ingresos (abonos/transferencias recibidas) de la cartola BCI. El PDF cifrado se abre con el RUT (`BCI_PDF_PASSWORD` o arg `rut_password`). Detección por saldo diario + palabras clave de abono.
+- Email MCP: `pdfplumber` como dependencia principal para parsear el PDF de la cartola.
+- Tests: `tests/test_email_bci.py` + fixture PDF cifrado (`tests/fixtures/cartola_bci_fixture_enc.pdf`) que valida la detección de ingresos/cargos.
+- CI: `deploy-nara` inyecta `BCI_PDF_PASSWORD` vía GitHub secret.
+
 ## [v1.7.4] — 2026-07-14
 
 ### Añadido

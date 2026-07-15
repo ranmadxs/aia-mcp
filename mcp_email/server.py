@@ -477,6 +477,136 @@ def _fetch_bci_cartola(period: str, force_refresh: bool = False):
     return doc, False
 
 
+# ── Parser de movimientos de la cartola BCI (PDF cifrado) ────────────────────
+
+import re
+
+import pdfplumber
+
+BCI_PDF_PASSWORD = os.getenv("BCI_PDF_PASSWORD", "")
+
+# Palabras que en la descripción de BCI indican un abono/ingreso.
+# Se excluye CREDITO/CRÉDITO (ambiguous: "PAGO CREDITO" es un cargo).
+_ABONO_KEYWORDS = (
+    "TRANSFER", "ABONO", "TRASPASO FONDOS", "PAGO RECIBIDO", "DEPOSITO",
+    "DEPÓSITO", "RECAUDACION", "ACREDITACION", "ACREDITACIÓN", "NOTA ABONO",
+    "REINTEGRO", "DEVOLUCION", "DEVOLUCIÓN",
+)
+
+_AMOUNT_RE = re.compile(r"[\d.]{2,}")
+
+
+def _parse_amount(token: str) -> float:
+    """Convierte '1.300.000' -> 1300000.0."""
+    return float(token.replace(".", "").replace(",", "."))
+
+
+def _extract_movements(pdf_bytes: bytes, password: str) -> list[dict]:
+    """Extrae los movimientos de la cartola BCI desde el PDF cifrado.
+
+    Cada línea de movimiento tiene la forma:
+        FECHA  SUCURSAL  DESCRIPCION  [Nº DOC]  MONTO  SALDO
+    El ingreso se detecta comparando el saldo con la fila anterior (sube => abono)
+    o por palabras clave de abono en la descripción.
+    """
+    movements: list[dict] = []
+    prev_saldo = None
+    with pdfplumber.open(__import__("io").BytesIO(pdf_bytes), password=password or "") as pdf:
+        for page in pdf.pages:
+            words = page.extract_words()
+            lineas: dict[int, list[str]] = {}
+            for w in words:
+                lineas.setdefault(round(w["top"]), []).append(w["text"])
+            for y in sorted(lineas):
+                txt = " ".join(lineas[y])
+                # Solo líneas que EMPieZAN con fecha DD-MM-YYYY (movimientos reales)
+                if not re.match(r"^\d{2}-\d{2}-\d{4}", txt):
+                    continue
+                if "SALDO" in txt or "al " in txt:
+                    continue
+                # tokens numéricos (montos y saldos)
+                nums = _AMOUNT_RE.findall(txt)
+                if len(nums) < 2:
+                    continue
+                fecha = txt[:10]
+                descripcion = txt[10:].split(nums[0])[0].strip()
+                monto = _parse_amount(nums[-2])
+                saldo = _parse_amount(nums[-1])
+                # Detectar ingreso: el saldo sube respecto a la fila anterior
+                # es la señal más fiable (BCI no separa cargo/abono por columna).
+                is_ingreso = False
+                has_abono_kw = any(k in descripcion.upper() for k in _ABONO_KEYWORDS)
+                if prev_saldo is None:
+                    # Primera fila: sin referencia de saldo, usar palabra clave.
+                    is_ingreso = has_abono_kw
+                elif saldo > prev_saldo:
+                    is_ingreso = True
+                # Refuerzo por palabra clave de abono (solo si el saldo no bajó).
+                elif saldo >= prev_saldo and has_abono_kw:
+                    is_ingreso = True
+                movements.append({
+                    "fecha": fecha,
+                    "descripcion": descripcion.strip(),
+                    "monto": monto,
+                    "saldo": saldo,
+                    "is_ingreso": is_ingreso,
+                })
+                prev_saldo = saldo
+    return movements
+
+
+@mcp.tool()
+def get_bci_cartola_ingresos(period: str = "", rut_password: str = "",
+                             force_refresh: bool = False) -> str:
+    """
+    Extrae solo los INGRESOS (abonos, depósitos, transferencias recibidas) de la
+    cartola cuenta corriente BCI del período. Cache-first igual que get_bci_cartola.
+
+    El PDF de la cartola está cifrado; se abre con el RUT de la cuenta (sin dígito
+    verificador) vía `rut_password` o la env var BCI_PDF_PASSWORD.
+
+    Args:
+        period: Período "YYYY-MM" (ej: "2026-07"). Vacío = mes actual.
+        rut_password: Clave del PDF (RUT de la cuenta). Si vacío usa BCI_PDF_PASSWORD.
+        force_refresh: Si True, re-descarga la cartola de Yahoo aunque exista en cache.
+
+    Returns:
+        Lista de ingresos (fecha, descripción, monto) y total del mes.
+    """
+    period = _resolve_period(period)
+    doc, cache_hit = _fetch_bci_cartola(period, force_refresh)
+    if doc is None:
+        return (f"❌ No se encontró cartola BCI para {period} en Yahoo ni MongoDB "
+                f"(¿aún no enviada para ese mes?).")
+    if isinstance(doc, dict) and doc.get("error"):
+        return f"❌ Error IMAP: {doc['error']}\n\nUsa App Password de Yahoo."
+    atts = doc.get("attachments", [])
+    if not atts:
+        return f"⚠️ La cartola {period} no tiene adjunto PDF para analizar."
+    password = rut_password or BCI_PDF_PASSWORD
+    if not password:
+        return ("❌ Falta la clave del PDF. Pasa `rut_password` (RUT de la cuenta) "
+                "o define BCI_PDF_PASSWORD en el entorno.")
+    try:
+        import base64 as _b64
+        pdf_bytes = _b64.b64decode(atts[0]["data_b64"])
+        movements = _extract_movements(pdf_bytes, password)
+    except Exception as e:
+        return (f"❌ No se pudo leer el PDF de la cartola ({e}). "
+                f"Verifica la clave (RUT de la cuenta BCI).")
+    ingresos = [m for m in movements if m["is_ingreso"]]
+    total = sum(m["monto"] for m in ingresos)
+    src = "📦 MongoDB (cache)" if cache_hit else "⬇️ Yahoo (nueva)"
+    lines = [
+        f"## Ingresos cartola BCI {period} — {src}",
+        f"**Total ingresos**: {total:,.0f}  |  **Movimientos**: {len(movements)}  "
+        f"|  **Ingresos**: {len(ingresos)}\n",
+    ]
+    for m in ingresos:
+        lines.append(f"- **{m['fecha']}**  {m['descripcion']}: {m['monto']:,.0f}")
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def get_bci_cartola(period: str = "", force_refresh: bool = False) -> str:
     """
