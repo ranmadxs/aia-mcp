@@ -339,6 +339,47 @@ async def sync_emails(limit: int = 100) -> str:
 
 
 @mcp.tool()
+async def sync_emails_since(since_date: str, before_date: str = "") -> str:
+    """
+    Sincroniza a MongoDB todos los correos del INBOX recibidos desde una fecha
+    (y opcionalmente hasta otra), usando IMAP SEARCH SINCE/BEFORE. Cubre rangos
+    amplios (ej. dic 2025 a hoy) sin importar la antigüedad. Solo guarda los
+    nuevos (dedup por Message-ID); las cartolas BCI se marcan automáticamente.
+    Corre en background; consulta con get_email_sync_status().
+
+    Args:
+        since_date: Fecha mínima ISO (ej: "2025-12-01"). Inclusive.
+        before_date: Fecha máxima ISO opcional (ej: "2026-07-15"). Exclusive.
+
+    Returns:
+        Confirmación de que el sync en background inició.
+    """
+    import anyio, asyncio
+    try:
+        since = datetime.fromisoformat(since_date)
+    except ValueError:
+        return f"❌ since_date inválido: '{since_date}'. Usa ISO (ej: '2025-12-01')."
+    if before_date:
+        try:
+            before = datetime.fromisoformat(before_date)
+        except ValueError:
+            return f"❌ before_date inválido: '{before_date}'. Usa ISO (ej: '2026-07-15')."
+    else:
+        before = date.today()
+    if _read_sync_state().get("running"):
+        return "⏳ Ya hay un sync en curso. Usa get_email_sync_status()."
+    since_s = since.strftime("%d-%b-%Y")
+    before_s = before.strftime("%d-%b-%Y")
+    criteria = f'SINCE {since_s} BEFORE {before_s}'
+    scope = f"{since_date}..{before_date or 'hoy'}"
+    async def _launch():
+        await anyio.to_thread.run_sync(_do_sync, criteria, "since", scope, 0)
+    asyncio.create_task(_launch())
+    return (f"🚀 Sync en background desde {since_date} "
+             f"({before_date or 'hasta hoy'}) iniciado. Usa get_email_sync_status().")
+
+
+@mcp.tool()
 async def sync_emails_from(from_addr: str, limit: int = 500) -> str:
     """
     Sincroniza a MongoDB todos los correos de UN remitente en Yahoo, sin importar

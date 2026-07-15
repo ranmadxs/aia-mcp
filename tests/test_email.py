@@ -248,3 +248,28 @@ def test_sync_emails_from_usa_search_by_from_y_dedup(monkeypatch):
     assert kinds.get("<b@x.com>") == "bci_cartola"
     assert kinds.get("<c@x.com>") == "email"
     assert "<a@x.com>" not in kinds  # duplicado no se reescribe
+
+
+def test_sync_emails_since_construye_search_since(monkeypatch):
+    """sync_emails_since usa IMAP SEARCH SINCE/BEFORE y corre en background."""
+    captured = {}
+
+    # Captura los argumentos con los que se llamaria al motor generico.
+    def _fake_do_sync(criteria, mode, scope, limit):
+        captured["criteria"] = criteria
+        captured["mode"] = mode
+
+    monkeypatch.setattr(srv, "_do_sync", _fake_do_sync)
+    monkeypatch.setattr(srv, "_read_sync_state", lambda: {"running": False})
+    # Captura la coroutine de background en vez de lanzarla.
+    import asyncio
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: captured.setdefault("task", coro))
+
+    out = asyncio.run(srv.sync_emails_since("2025-12-01", "2026-07-15"))
+    assert "background" in out
+    # Ejecuta la tarea de background capturada.
+    asyncio.run(captured["task"])
+    assert captured["mode"] == "since"
+    assert "SINCE" in captured["criteria"] and "BEFORE" in captured["criteria"]
+    assert "01-Dec-2025" in captured["criteria"]
+    assert "15-Jul-2026" in captured["criteria"]

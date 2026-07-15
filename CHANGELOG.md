@@ -5,9 +5,22 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
-## [v1.7.11] — 2026-07-15
+## [v1.8.0] — 2026-07-15
+
+> **Salto de MINOR** (antes veníamos haciendo cambios de funcionalidad como patch
+> en v1.7.x; corregido a MINOR según SemVer: nuevos tools y refactor de motor =
+> compatibilidad hacia atrás rota en la API interna de sync).
+
+### Agregado
+- Email MCP: nuevo tool `sync_emails_since(since_date, before_date="")` que
+  sincroniza todos los correos del INBOX desde una fecha (IMAP `SEARCH SINCE
+  BEFORE`), cubriendo rangos amplios (ej. dic 2025 a hoy) sin límite de
+  antigüedad. Usa el motor genérico y reporta en `get_email_sync_status()`.
 
 ### Refactor: motor de sincronización único y genérico
+- **Un solo motor** (`_do_sync`) para todas las variantes de sync: `sync_emails`
+  (INBOX), `sync_emails_from` (por remitente), `sync_emails_since` (por fecha) y
+  `sync_bci_cartolas` (cartolas BCI).
 - **Un solo motor** (`_do_sync`) para todas las variantes de sync: `sync_emails`
   (INBOX), `sync_emails_from` (por remitente) y `sync_bci_cartolas` (cartolas BCI).
   Antes cada uno tenía su propia lógica duplicada.
