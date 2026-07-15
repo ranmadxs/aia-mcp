@@ -207,3 +207,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 .aider*
+
+# BCI PDF fixtures (solo el cifrado se versiona)
+tests/fixtures/cartola_bci_fixture.pdf
