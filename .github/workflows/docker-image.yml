@@ -78,7 +78,11 @@ jobs:
         run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
       - name: Tag and push
         run: |
-          TAG="${{ env.RELEASE_VERSION }}"
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
           docker tag keitarodxs/aia-mcp:$TAG keitarodxs/aia-mcp:latest
           docker push keitarodxs/aia-mcp:$TAG
           docker push keitarodxs/aia-mcp:latest
@@ -105,7 +109,12 @@ jobs:
       - name: Desplegar con docker run en nara
         run: |
           set -e
-          IMAGE="keitarodxs/aia-mcp:${{ env.RELEASE_VERSION }}"
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            TAG="${{ github.event.inputs.version }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          IMAGE="keitarodxs/aia-mcp:$TAG"
           docker pull "$IMAGE"
           docker stop aia-mcp 2>/dev/null || true
           docker rm aia-mcp 2>/dev/null || true
