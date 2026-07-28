@@ -112,7 +112,7 @@ El repo publica automáticamente la imagen `keitarodxs/aia-mcp` en Docker Hub al
 pushear un tag `v*.*.*` (workflow `.github/workflows/docker-image.yml`).
 
 ### Local / servidor con Docker
-
+deprecated?
 ```bash
 docker compose pull
 docker compose up -d
