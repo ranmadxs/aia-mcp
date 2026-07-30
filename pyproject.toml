@@ -13,6 +13,7 @@ packages = [
     {include = "airbnb"},
     {include = "charts"},
     {include = "mcp_email"},
+    {include = "mcp_banco_bci"},
     {include = "mangadex"},
     {include = "swagger"},
 ]
