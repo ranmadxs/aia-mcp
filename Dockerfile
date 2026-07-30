@@ -35,6 +35,7 @@ COPY shell ./shell
 COPY airbnb ./airbnb
 COPY charts ./charts
 COPY mcp_email ./mcp_email
+COPY mcp_banco_bci ./mcp_banco_bci
 COPY mangadex ./mangadex
 COPY swagger ./swagger
 # README.md es requerido por pyproject.toml (readme = "README.md") para
