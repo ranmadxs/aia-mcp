@@ -36,7 +36,7 @@ YAHOO_EMAIL       = os.getenv("YAHOO_EMAIL", "")
 YAHOO_APP_PASSWORD = os.getenv("YAHOO_APP_PASSWORD", "")
 IMAP_SERVER       = "imap.mail.yahoo.com"
 IMAP_PORT         = 993
-MONGODB_URI       = os.getenv("MONGODB_URI", "")
+MONGODB_URI       = os.getenv("MONGODB_URI_MAIN", "")
 DB_NAME           = "email"
 COLLECTION        = "emails"
 
@@ -201,7 +201,7 @@ def get_email_status() -> str:
         except Exception as e:
             lines.append(f"❌ **MongoDB**: {e}")
     else:
-        lines.append("❌ **MongoDB**: MONGODB_URI no configurado")
+        lines.append("❌ **MongoDB**: MONGODB_URI_MAIN no configurado")
 
     lines.append(f"\n**Cuenta**: {YAHOO_EMAIL or '(no configurado)'}")
     return "\n".join(lines)

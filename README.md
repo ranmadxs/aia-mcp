@@ -2,7 +2,7 @@
 
 Servidor MCP (Model Context Protocol) que expone herramientas para el agente **aia** del proyecto hermano [amanda-IA](https://github.com/your-org/amanda-IA).
 
-`aia-mcp` agrupa varios servidores MCP independientes (temperatura, Warhammer 40K, monitor de estanque, shell, Airbnb, charts, email, MangaDex, swagger) que el agente aia consume vía stdio o HTTP.
+`aia-mcp` agrupa varios servidores MCP independientes (temperatura, Warhammer 40K, monitor de estanque, Airbnb, charts, email, MangaDex, swagger) que el agente aia consume vía stdio o HTTP.
 
 ## Estructura
 
@@ -14,7 +14,7 @@ aia-mcp/
 ├── docker-compose.yml         # despliegue en nara
 ├── mcp_cli/                   # CLI (entry point `mcp`) y registro de servidores
 ├── specs/                     # especificaciones (ej. SPEC_TEMPERATURA.md)
-├── temperatura/  wahapedia/  monitor/  shell/  airbnb/
+├── temperatura/  wahapedia/  monitor/  airbnb/
 ├── charts/  mcp_email/  mangadex/  swagger/
 ├── resources/mcp-ssh/         # config de mcp-ssh (no usado en la imagen)
 └── tests/                     # tests unitarios (pytest)
@@ -60,7 +60,6 @@ poetry run aia-mcp all --http           # todos los servidores en paralelo
 | temperatura  | 8001   | airbnb     | 8006   |
 | wahapedia    | 8002   | charts     | 8007   |
 | monitor      | 8003   | email      | 8008   |
-| shell        | 8005   | mangadex   | 8009   |
 | swagger      | 8010   | drawio-mcp | 3000/3333 |
 
 > `drawio-mcp-server` se instala dentro de la imagen Docker (no es un servidor
@@ -176,11 +175,10 @@ Cache en disco configurable: `WAHAPEDIA_CACHE_ENABLED`, `WAHAPEDIA_CACHE_DIR`,
 
 Requiere `MONGODB_URI` y `AIRBNB_DB`.
 
-### charts / email / mangadex / shell / swagger
+### charts / email / mangadex / swagger
 
 - **charts**: genera gráficos (matplotlib) desde datos de MongoDB.
 - **email**: consulta correo IMAP Yahoo (`YAHOO_EMAIL`, `YAHOO_APP_PASSWORD`).
 - **mangadex**: descarga/consulta mangas (`AIA_MANGA_DIR`).
-- **shell**: `run_command(command, cwd)` para ejecutar comandos desde el agente.
 - **swagger**: UI de documentación de APIs en `:8010`.
 

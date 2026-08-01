@@ -31,7 +31,6 @@ COPY mcp_cli ./mcp_cli
 COPY temperatura ./temperatura
 COPY wahapedia ./wahapedia
 COPY monitor ./monitor
-COPY shell ./shell
 COPY airbnb ./airbnb
 COPY charts ./charts
 COPY mcp_email ./mcp_email
@@ -89,7 +88,7 @@ RUN mkdir -p /app/logs /app/.aia/cache/wahapedia /app/.aia/manga \
 VOLUME ["/app/logs", "/app/.aia"]
 
 # ── Puertos expuestos ─────────────────────────────────────────────────────────
-# temperatura 8001 | wahapedia 8002 | monitor 8003 | shell 8005
+# temperatura 8001 | wahapedia 8002 | monitor 8003 
 # airbnb 8006 | charts 8007 | email 8008 | mangadex 8009 | swagger 8010
 # drawio-mcp 3000 (HTTP) + 3333 (WS extensión)
 EXPOSE 8001 8002 8003 8005 8006 8007 8008 8009 8010 3000 3333

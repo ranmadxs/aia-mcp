@@ -11,7 +11,6 @@ import uvicorn
 from temperatura.server import mcp as temperatura_mcp
 from wahapedia.server import mcp as wahapedia_mcp
 from monitor.server import mcp as monitor_mcp
-from shell.server import mcp as shell_mcp
 from airbnb.server import mcp as airbnb_mcp
 from charts.server import mcp as charts_mcp
 from mcp_email.server import mcp as email_mcp
@@ -24,7 +23,6 @@ _servers = {
     "temperatura": temperatura_mcp,
     "wahapedia": wahapedia_mcp,
     "monitor": monitor_mcp,
-    "shell": shell_mcp,
     "airbnb": airbnb_mcp,
     "charts": charts_mcp,
     "email": email_mcp,
