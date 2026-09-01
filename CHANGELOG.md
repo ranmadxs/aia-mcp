@@ -5,6 +5,29 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.9.1] — 2026-09-01
+
+> **PATCH** — regularización del release v1.9.0: expone `mcp_banco_bci` en
+> el cliente MCP local y confirma la eliminación definitiva del server `shell`
+> removido en v1.8.x. Sin cambios funcionales en código.
+
+### Cambiado
+- **cliente MCP local**: `~/.config/opencode/opencode.json` ahora incluye
+  `aia-mcp-bci` apuntando a `http://nara:8011/mcp`, alineado con el puerto
+  declarado en `mcp_cli/cli.py` (`SERVER_PORTS["banco_bci"] = 8011`).
+- **shell**: confirmado fuera del registro `SERVERS` (eliminado en `f5682cf`).
+  El proceso zombie `:8005` en nara corresponde a la imagen `aia-mcp:v1.9.0`
+  previa a la limpieza y se reciclará en el próximo redeploy.
+
+### Notas
+- El server `swagger` (`:8010`) sigue caído en nara por dependencia faltante
+  (`fastapi` no instalado en el venv de producción); no se repara en este
+  patch porque requiere cambio de imagen.
+- No se bumpa a MINOR porque no se agrega ninguna capacidad nueva, solo se
+  documenta y se corrige la configuración del cliente.
+
+---
+
 ## [v1.9.0] — 2026-09-01
 
 > **MINOR** — nueva funcionalidad compatible hacia atrás: el servidor
