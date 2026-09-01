@@ -186,7 +186,8 @@ def main() -> None:
     module = __import__(module_name, fromlist=[attr])
 
     if use_http:
-        port = os.environ.get("FASTMCP_PORT", "8001")
+        port = str(SERVER_PORTS.get(server_name, int(os.environ.get("FASTMCP_PORT", "8001"))))
+        os.environ["FASTMCP_PORT"] = port
         _setup_logging(server_name)
         logging.info("MCP HTTP en http://%s:%s/mcp", DEFAULT_HTTP_HOST, port)
         

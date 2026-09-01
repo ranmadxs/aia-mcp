@@ -5,6 +5,31 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.9.2] — 2026-09-01
+
+> **PATCH** — dos bugfixes de port-mapping y selección de puerto. Sin
+> cambios de API ni de tools. Compatible hacia atrás con v1.9.1.
+
+### Corregido
+- **CI/CD (`.github/workflows/docker-image.yml`)**: se elimina `-p 8005:8005`
+  del `docker run` del job `deploy-nara`. El server `shell` fue removido del
+  registro `SERVERS` en `f5682cf`, pero el workflow seguía publicando el puerto,
+  lo que provocaba un bind zombie cada vez que se redesplegaba. El puerto ya
+  no se expone desde el contenedor y se libera en el próximo redeploy.
+- **`mcp_cli/cli.py`**: la ruta `mcp <server> --http` ignoraba
+  `SERVER_PORTS[server_name]` y caía siempre en `:8001` (hardcodeado). Ahora
+  resuelve el puerto desde el registro con `SERVER_PORTS[server_name]`,
+  manteniendo fallback a `FASTMCP_PORT` env / `8001`. Esto afecta a levantar
+  un server individual por HTTP; `aia-mcp all --http` ya estaba correcto.
+
+### Notas
+- El server `swagger` (`:8010`) sigue caído en nara por dependencia faltante
+  (`fastapi`); no se repara en este patch porque requiere cambio de imagen.
+- El contenedor actual en nara (`keitarodxs/aia-mcp:v1.9.0`) debe
+  redesplegarse tras mergear para que el cambio en el workflow tome efecto.
+
+---
+
 ## [v1.9.1] — 2026-09-01
 
 > **PATCH** — regularización del release v1.9.0: expone `mcp_banco_bci` en
