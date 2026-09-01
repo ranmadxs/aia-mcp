@@ -44,7 +44,11 @@ def _discover_aia_jobs_url() -> str:
 AIA_JOBS_API_URL = os.getenv("AIA_JOBS_API_URL") or _discover_aia_jobs_url()
 AIA_JOBS_TIMEOUT = float(os.getenv("AIA_JOBS_TIMEOUT", "600"))
 
-mcp = FastMCP("banco_bci")
+mcp = FastMCP(
+    "banco_bci",
+    host=os.environ.get("FASTMCP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("FASTMCP_PORT", "8011")),
+)
 
 
 # ── Cliente HTTP a aia-jobs ──────────────────────────────────────────────────

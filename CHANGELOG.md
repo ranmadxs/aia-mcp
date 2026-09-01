@@ -5,6 +5,33 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.9.3] — 2026-09-01
+
+> **PATCH** — bugfix bloqueante: el servidor `mcp_banco_bci` respondía
+> `421 Misdirected Request` a cualquier conexión con `Host` distinto de
+> `127.0.0.1` / `localhost`. Lo dejaba inutilizable desde opencode en nara.
+
+### Corregido
+- **`mcp_banco_bci/server.py`**: la instancia `FastMCP("banco_bci")` no
+  recibía el parámetro `host`, así que el SDK usaba el default `127.0.0.1` y
+  activaba el guard anti-DNS-rebinding interno (`TransportSecuritySettings`).
+  Este guard rechaza con 421 cualquier `Host` que no esté en
+  `["127.0.0.1:*", "localhost:*", "[::1]:*"]`. Ahora `FastMCP` se construye
+  con `host=os.environ.get("FASTMCP_HOST", "127.0.0.1")`, alineado con el
+  resto de servers (`temperatura`, `wahapedia`, `monitor`, `airbnb`,
+  `charts`, `email`, `mangadex`). Cuando el cli lanza los servers con
+  `FASTMCP_HOST=0.0.0.0`, el guard se desactiva y el server acepta conexiones
+  desde cualquier Host.
+
+### Notas
+- El guard anti-DNS-rebinding del SDK **es deseable** cuando el server corre
+  en stdio local. Por eso el default sigue siendo `127.0.0.1` si no hay
+  `FASTMCP_HOST` en el entorno.
+- En nara el contenedor `keitarodxs/aia-mcp:v1.9.3` permitirá a opencode
+  conectarse a `:8011/mcp` sin necesidad de header `Host` especial.
+
+---
+
 ## [v1.9.2] — 2026-09-01
 
 > **PATCH** — dos bugfixes de port-mapping y selección de puerto. Sin
