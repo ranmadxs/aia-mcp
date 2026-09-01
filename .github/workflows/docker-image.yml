@@ -121,7 +121,8 @@ jobs:
           docker run -d --name aia-mcp --restart unless-stopped \
             -p 8001:8001 -p 8002:8002 -p 8003:8003 -p 8005:8005 \
             -p 8006:8006 -p 8007:8007 -p 8008:8008 -p 8009:8009 \
-            -p 8010:8010 -p 3000:3000 -p 3333:3333 \
+            -p 8010:8010 -p 8011:8011 \
+            -p 3000:3000 -p 3333:3333 \
             -v /opt/aia-mcp/logs:/app/logs \
             -v /opt/aia-mcp/.aia:/app/.aia \
             -e FASTMCP_HOST=0.0.0.0 -e FASTMCP_LOG_LEVEL=INFO \
@@ -130,6 +131,7 @@ jobs:
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
              -e MONGODB_URI_LOCAL="${{ secrets.MONGODB_URI_LOCAL }}" \
             -e BCI_PDF_PASSWORD="${{ secrets.BCI_PDF_PASSWORD }}" \
+            -e AIA_JOBS_API_URL="${{ secrets.AIA_JOBS_API_URL }}" \
             "$IMAGE"
           echo "Despliegue en nara completado (imagen: $IMAGE)"
 
@@ -213,3 +215,17 @@ jobs:
             echo "esperando airbnb... ($i)"; sleep 3
           done
           echo "TIMEOUT airbnb"; docker logs aia-mcp --tail 30 || true; exit 1
+      - name: Test banco_bci (8011)
+        run: |
+          set -e
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8011/mcp \
+              -X POST \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"it","version":"1.0"}}}' 2>/dev/null; then
+              echo "banco_bci OK"; exit 0
+            fi
+            echo "esperando banco_bci... ($i)"; sleep 3
+          done
+          echo "TIMEOUT banco_bci"; docker logs aia-mcp --tail 30 || true; exit 1

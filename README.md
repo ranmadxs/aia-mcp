@@ -60,7 +60,8 @@ poetry run aia-mcp all --http           # todos los servidores en paralelo
 | temperatura  | 8001   | airbnb     | 8006   |
 | wahapedia    | 8002   | charts     | 8007   |
 | monitor      | 8003   | email      | 8008   |
-| swagger      | 8010   | drawio-mcp | 3000/3333 |
+| swagger      | 8010   | banco_bci  | 8011   |
+| drawio-mcp   | 3000/3333 |        |        |
 
 > `drawio-mcp-server` se instala dentro de la imagen Docker (no es un servidor
 > MCP de este repo) y expone HTTP en `:3000` + WebSocket de extensión en `:3333`.
@@ -174,6 +175,26 @@ Cache en disco configurable: `WAHAPEDIA_CACHE_ENABLED`, `WAHAPEDIA_CACHE_DIR`,
   **get_calendario_mes_airbnb(mes, anio)**, **get_ingresos_mes(mes, anio)**
 
 Requiere `MONGODB_URI` y `AIRBNB_DB`.
+
+### banco_bci — cartolas BCI y pipeline completo
+
+Consulta de cartolas almacenadas en MongoDB y orquestación del pipeline BCI
+vía API HTTP de `aia-jobs` (expone `/api/jobs/*` en `:8080`).
+
+- **banco_bci(period)**: cartolas BCI del período con sus movimientos.
+- **banco_bci_list_periods()**: lista de períodos disponibles en `bci.cartolas`.
+- **sync_bci_trx(year, month, batch_size, skip_email_download, skip_transform,
+  sender)**: ejecuta el pipeline completo en una sola llamada
+  (descarga emails BCI de Yahoo → transforma PDFs → sincroniza movimientos a
+  `bci.transacciones` en Atlas). Las 3 fases son idempotentes y se pueden
+  saltar con `skip_email_download` / `skip_transform` para re-runs parciales.
+- **get_bci_job_status()**: estado del último job BCI en `aia-jobs`
+  (`running`, `current_job`, `progress`, `last_result`).
+- **get_bci_api_health()**: health-check de la API de `aia-jobs`.
+
+Variables `.env`: `MONGODB_URI` (consulta), `AIA_JOBS_API_URL`
+(default `http://172.17.0.1:8080` = gateway bridge de Docker al host donde
+corre `aia-jobs`), `AIA_JOBS_TIMEOUT` (default `600`s).
 
 ### charts / email / mangadex / swagger
 

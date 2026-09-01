@@ -19,6 +19,7 @@ SERVERS: dict[str, tuple[str, str]] = {
     "airbnb": ("airbnb.server", "mcp"),
     "charts": ("charts.server", "mcp"),
     "email": ("mcp_email.server", "mcp"),
+    "banco_bci": ("mcp_banco_bci.server", "mcp"),
     "mangadex": ("mangadex.server", "mcp"),
     "swagger": ("swagger.server", "run_server"),
 }
@@ -31,6 +32,7 @@ SERVER_PORTS: dict[str, int] = {
     "airbnb": 8006,
     "charts": 8007,
     "email": 8008,
+    "banco_bci": 8011,
     "mangadex": 8009,
     "swagger": 8010,
 }

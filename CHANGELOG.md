@@ -5,6 +5,40 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.9.0] — 2026-09-01
+
+> **MINOR** — nueva funcionalidad compatible hacia atrás: el servidor
+> `mcp_banco_bci` se conecta a la API HTTP de `aia-jobs` (en `:8080`) y expone
+> el pipeline completo BCI como 3 tools MCP.
+
+### Agregado
+- **mcp_banco_bci**: nuevo tool `sync_bci_trx(year, month, batch_size,
+  skip_email_download, skip_transform, sender)` que orquesta el pipeline
+  completo en una sola llamada:
+  1. `POST /api/jobs/sync-bci-emails` (Yahoo IMAP → `email.emails`)
+  2. `POST /api/jobs/sync-historical-bci` (PDFs → `bci.cartolas`)
+  3. `POST /api/jobs/sync-trx` (`bci.cartolas` → `bci.transacciones` en Atlas)
+  Cada fase es idempotente y se puede saltar con `skip_*` para re-runs
+  parciales. Las llamadas HTTP se hacen en `asyncio.to_thread` para no
+  bloquear el event loop del MCP.
+- **mcp_banco_bci**: nuevo tool `get_bci_job_status()` — estado instantáneo
+  del último job en `aia-jobs` (`running`, `current_job`, `progress`,
+  `last_result`, `total_cartolas_bci`).
+- **mcp_banco_bci**: nuevo tool `get_bci_api_health()` — verifica que la
+  API de aia-jobs responde y reporta su versión.
+- **mcp_cli/cli.py**: registrado `banco_bci` en `SERVERS` con puerto HTTP
+  `8011`.
+- **.env.example**: nueva variable `AIA_JOBS_API_URL` (default
+  `http://nara:8080`) y `AIA_JOBS_TIMEOUT` (default `600`s).
+
+### Cambiado
+- **mcp_banco_bci/server.py**: importa `httpx` para hablar con `aia-jobs`.
+  Antes solo leía MongoDB directamente; ahora consume la API del listener
+  para la parte de orquestación (mantiene la lectura directa para los tools
+  de consulta).
+
+---
+
 ## [v1.8.2] — 2026-07-15
 
 ### Corregido

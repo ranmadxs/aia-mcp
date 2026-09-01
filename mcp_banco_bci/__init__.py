@@ -1,1 +1,1 @@
-Banco BCI — consulta de cartolas y movimientos desde MongoDB.
+"""Banco BCI - orquestacion del pipeline BCI via API de aia-jobs."""
