@@ -5,6 +5,35 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.11.0] — 2026-09-01
+
+> **MINOR** — `mcp_banco_bci`: nueva tool `get_bci_ingresos_mes` que consulta
+> `bci.transacciones` en Atlas y devuelve los ingresos (abonos) de un mes
+> con su total. Reconstruye la lógica del viejo `get_bci_cartola_ingresos`
+> que se eliminó en `703ec35` (cuando se removió toda la lógica BCI del
+> email MCP), pero ya no parsea PDFs — lee directo de MongoDB.
+
+### Agregado
+- **`mcp_banco_bci/server.py:get_bci_ingresos_mes(period="YYYY-MM", limit=50)`**:
+  - Filtra `bci.transacciones` por regex sobre el campo `fecha` (string
+    `dd-mm-yyyy`) usando el token `-MM-YYYY`.
+  - Devuelve total de ingresos (suma de `abono`), total de cargos, cantidad
+    de movimientos y la lista de abonos con fecha, descripción, sucursal
+    y monto, ordenados desc por fecha.
+  - `limit` solo aplica a la lista mostrada; el total SIEMPRE incluye
+    todos los abonos del mes.
+  - Helper `_to_float` para normalizar `abono`/`cargo` (algunos vienen
+    como string en la colección).
+- Lee `MONGODB_URI` (con fallback `MONGODB_URI_LOCAL`) del entorno.
+
+### Notas
+- Prerequisito: que `sync_bci_trx` haya corrido para ese mes. Si la
+  colección está vacía devuelve mensaje sugiriendo correrlo.
+- Verificado localmente con `period=2026-08`: 4 abonos, $604.980 total.
+- Tras mergear, redesplegar `keitarodxs/aia-mcp:v1.11.0` en nara.
+
+---
+
 ## [v1.10.0] — 2026-09-01
 
 > **MINOR** — `mcp_banco_bci`: `sync_bci_trx` pasa a fire-and-forget.

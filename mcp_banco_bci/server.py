@@ -334,6 +334,114 @@ def get_bci_job_status(job_id: str = "") -> str:
 
 
 @mcp.tool()
+def get_bci_ingresos_mes(period: str = "", limit: int = 50) -> str:
+    """
+    Ingresos (abonos) de la cuenta corriente BCI para un período, leídos
+    directamente desde MongoDB Atlas (`bci.transacciones`).
+
+    Reconstruye la lógica eliminada en `703ec35` (cuando se removió
+    `get_bci_cartola_ingresos` del email MCP), pero ahora consulta la
+    colección sincronizada por `sync_bci_trx` en vez de parsear el PDF.
+
+    Args:
+        period: Período "YYYY-MM" (ej: "2026-08"). Vacío = mes actual.
+        limit:  Máx. ingresos a listar (default 50). El total siempre
+                incluye TODOS los abonos del mes, no se trunca.
+
+    Returns:
+        Total de ingresos del mes, cantidad de movimientos (abonados
+        y cargos) y lista de abonos con fecha, descripción, sucursal
+        y monto.
+    """
+    import os as _os
+    from datetime import datetime as _dt
+
+    if not period:
+        period = f"{_dt.now().year:04d}-{_dt.now().month:02d}"
+
+    try:
+        year_s, month_s = period.split("-")
+        year, month = int(year_s), int(month_s)
+        if not (1 <= month <= 12) or year < 2000:
+            raise ValueError
+    except (ValueError, IndexError):
+        return f"❌ Período inválido: `{period}`. Usa formato YYYY-MM (ej: 2026-08)."
+
+    # `fecha` se guarda como string 'dd-mm-yyyy' (formato de la cartola BCI).
+    month_token = f"-{month:02d}-{year:04d}"
+    fecha_filter: dict = {"fecha": {"$regex": f".*{month_token}"}}
+
+    uri = _os.getenv("MONGODB_URI") or _os.getenv("MONGODB_URI_LOCAL")
+    if not uri:
+        return "❌ Falta MONGODB_URI (o MONGODB_URI_LOCAL) en el entorno."
+
+    try:
+        from pymongo import MongoClient
+        client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        col = client["bci"]["transacciones"]
+    except Exception as e:
+        return f"❌ No se pudo conectar a MongoDB Atlas: {type(e).__name__}: {e}"
+
+    # Todas las trx del mes (para stats de cargos y total abonos)
+    all_trx = list(col.find(fecha_filter))
+    if not all_trx:
+        return (
+            f"⚠️ No hay transacciones en `bci.transacciones` para {period}.\n"
+            f"¿Corriste `sync_bci_trx` para ese mes?"
+        )
+
+    abonos = [t for t in all_trx if _to_float(t.get("abono")) > 0]
+    cargos = [t for t in all_trx if _to_float(t.get("cargo")) > 0]
+    total_ingresos = sum(_to_float(t["abono"]) for t in abonos)
+    total_cargos = sum(_to_float(t["cargo"]) for t in cargos)
+
+    lines = [
+        f"## Ingresos BCI {period} — desde Atlas (`bci.transacciones`)",
+        f"**Total ingresos**: ${total_ingresos:,.0f}  |  "
+        f"**Abonos**: {len(abonos)}  |  "
+        f"**Cargos**: {len(cargos)} (${total_cargos:,.0f})  |  "
+        f"**Movimientos totales**: {len(all_trx)}\n",
+    ]
+
+    # Ordenar abonos por fecha desc (string dd-mm-yyyy ordena OK si mismo año)
+    abonos_sorted = sorted(
+        abonos,
+        key=lambda t: t.get("fecha", ""),
+        reverse=True,
+    )
+
+    shown = abonos_sorted[:limit]
+    if abonos_sorted:
+        lines.append(f"### Abonos (mostrando {len(shown)}/{len(abonos_sorted)})\n")
+        for t in shown:
+            fecha = t.get("fecha", "?")
+            desc = t.get("descripcion", "")
+            suc = t.get("sucursal", "")
+            monto = _to_float(t["abono"])
+            suc_str = f" ({suc})" if suc else ""
+            lines.append(f"- **{fecha}**  {desc}{suc_str}  → ${monto:,.0f}")
+        if len(abonos_sorted) > limit:
+            lines.append(
+                f"\n_…{len(abonos_sorted) - limit} abonos más no mostrados. "
+                f"Subí `limit` si querés ver todos._"
+            )
+
+    return "\n".join(lines)
+
+
+def _to_float(v) -> float:
+    """Convierte el campo `abono`/`cargo` a float. BCI lo guarda como string."""
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "").strip())
+    except (ValueError, TypeError):
+        return 0.0
+
+
+@mcp.tool()
 def get_bci_api_health() -> str:
     """
     Verifica que la API de aia-jobs (puerto 8080) responde.
