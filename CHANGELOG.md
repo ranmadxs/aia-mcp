@@ -5,6 +5,46 @@ Servidores MCP custom para el agente amanda-IA.
 
 ---
 
+## [v1.10.0] — 2026-09-01
+
+> **MINOR** — `mcp_banco_bci`: `sync_bci_trx` pasa a fire-and-forget.
+> El cliente ya no se bloquea ni aborta por timeout mientras el pipeline
+> BCI corre en aia-jobs. Nueva capacidad: `job_id` para polling.
+
+### Agregado
+- **`mcp_banco_bci/server.py`**: `sync_bci_trx` ahora arranca las 3 fases del
+  pipeline en una background task (`asyncio.create_task`) y devuelve de
+  inmediato un `job_id` (uuid12) junto al periodo. El registro local de jobs
+  vive en `_JOBS` (dict protegido por `_JOBS_LOCK`) y se actualiza a medida
+  que cada fase avanza (`pending → running → ok|error → completed`).
+- **`get_bci_job_status(job_id=...)`**: acepta un `job_id` opcional. Cuando
+  se entrega, devuelve el detalle del job local (status, started_at,
+  finished_at, error y el resultado por fase con sus métricas:
+  `downloaded`/`already_existed`, `transformed`/`skipped`/`errors`,
+  `synced`/`skipped_duplicate`/`errors`/`total_new`). Cuando `job_id` viene
+  vacío, conserva el comportamiento anterior (estado global de aia-jobs)
+  y además lista los últimos 10 jobs locales del MCP.
+- **`.env`**: nueva variable `AIA_JOBS_TIMEOUT=1800` (30 min) como default
+  para los HTTP client hacia aia-jobs. Anteriormente el default en código
+  era 600s, suficiente para el ping `/openapi.json` pero insuficiente para
+  el pipeline completo.
+
+### Cambiado
+- **Default en código** (`server.py`): `AIA_JOBS_TIMEOUT` default sube
+  `600 → 1800`. La variable de entorno `.env` toma precedencia.
+
+### Notas
+- El cambio es compatible con llamadas que ignoran `job_id`: el pipeline
+  sigue ejecutándose íntegro en aia-jobs; lo único que cambia es que el MCP
+  ya no espera el resultado. Si el cliente quiere esperar, basta con un
+  loop de `get_bci_job_status(job_id=...)` hasta `status == completed`.
+- `aia-jobs` no expone endpoint para lanzar jobs async; el background se
+  maneja en el MCP. Esto mantiene a aia-jobs simple y la lógica de
+  orquestación donde corresponde (un único punto de retry y registro).
+- Tras mergear, redesplegar la imagen `keitarodxs/aia-mcp:v1.10.0` en nara.
+
+---
+
 ## [v1.9.3] — 2026-09-01
 
 > **PATCH** — bugfix bloqueante: el servidor `mcp_banco_bci` respondía

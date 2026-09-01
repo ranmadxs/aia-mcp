@@ -1,6 +1,10 @@
 """Banco BCI - orquestacion del pipeline BCI via API de aia-jobs."""
 
+import asyncio
 import os
+import uuid
+from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
@@ -42,7 +46,7 @@ def _discover_aia_jobs_url() -> str:
 
 
 AIA_JOBS_API_URL = os.getenv("AIA_JOBS_API_URL") or _discover_aia_jobs_url()
-AIA_JOBS_TIMEOUT = float(os.getenv("AIA_JOBS_TIMEOUT", "600"))
+AIA_JOBS_TIMEOUT = float(os.getenv("AIA_JOBS_TIMEOUT", "1800"))
 
 mcp = FastMCP(
     "banco_bci",
@@ -81,6 +85,101 @@ def _jobs_get(path: str) -> dict:
         return {"error": f"{type(e).__name__}: {e}"}
 
 
+# ── Registro de jobs fire-and-forget ──────────────────────────────────────────
+# Cuando opencode (o cualquier cliente MCP) invoca sync_bci_trx, el pipeline
+# puede tardar varios minutos (IMAP + PDF + Atlas). Si el MCP esperara
+# sincronamente, el cliente abortaba por timeout. En vez de eso:
+#   1. sync_bci_trx arranca el pipeline en background (asyncio.create_task)
+#   2. devuelve inmediatamente un job_id
+#   3. get_bci_job_status(job_id=...) reporta el progreso sin volver a
+#      tocar aia-jobs; consulta el estado en este registro local.
+
+_JOBS: dict[str, dict[str, Any]] = {}
+_JOBS_LOCK = asyncio.Lock()
+
+
+async def _set_job(job_id: str, **fields: Any) -> None:
+    async with _JOBS_LOCK:
+        rec = _JOBS.setdefault(job_id, {
+            "job_id": job_id,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "status": "pending",
+            "phases": [],
+        })
+        rec.update(fields)
+
+
+async def _append_phase(job_id: str, phase: dict[str, Any]) -> None:
+    async with _JOBS_LOCK:
+        _JOBS[job_id]["phases"].append(phase)
+
+
+async def _run_pipeline(
+    job_id: str,
+    year: int,
+    month: int,
+    batch_size: int,
+    skip_email_download: bool,
+    skip_transform: bool,
+    sender: str,
+) -> None:
+    """Ejecuta las 3 fases secuencialmente y actualiza _JOBS[job_id]."""
+    await _set_job(job_id, status="running", started_at=datetime.now(timezone.utc).isoformat())
+
+    # Fase 1: descarga de emails
+    if not skip_email_download:
+        phase: dict[str, Any] = {"name": "sync-bci-emails", "status": "running"}
+        await _append_phase(job_id, phase)
+        r1 = await asyncio.to_thread(
+            _jobs_post,
+            "/api/jobs/sync-bci-emails",
+            {"sender": sender, "year": year, "month": month},
+        )
+        phase["result"] = r1
+        phase["status"] = "error" if r1.get("error") else "ok"
+        phase["finished_at"] = datetime.now(timezone.utc).isoformat()
+        if r1.get("error"):
+            await _set_job(job_id, status="error", error=f"fase 1: {r1['error']}")
+            return
+
+    # Fase 2: transformacion de PDFs → cartolas
+    if not skip_transform:
+        phase = {"name": "sync-historical-bci", "status": "running"}
+        await _append_phase(job_id, phase)
+        r2 = await asyncio.to_thread(
+            _jobs_post,
+            "/api/jobs/sync-historical-bci",
+            {"months_back": 0},
+        )
+        phase["result"] = r2
+        phase["status"] = "error" if r2.get("error") else "ok"
+        phase["finished_at"] = datetime.now(timezone.utc).isoformat()
+        if r2.get("error"):
+            await _set_job(job_id, status="error", error=f"fase 2: {r2['error']}")
+            return
+
+    # Fase 3: sync de movimientos a Atlas
+    phase = {"name": "sync-trx", "status": "running", "batch_size": batch_size}
+    await _append_phase(job_id, phase)
+    r3 = await asyncio.to_thread(
+        _jobs_post,
+        "/api/jobs/sync-trx",
+        {"batch_size": batch_size},
+    )
+    phase["result"] = r3
+    phase["status"] = "error" if r3.get("error") else "ok"
+    phase["finished_at"] = datetime.now(timezone.utc).isoformat()
+    if r3.get("error"):
+        await _set_job(job_id, status="error", error=f"fase 3: {r3['error']}")
+        return
+
+    await _set_job(
+        job_id,
+        status="completed",
+        finished_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
 # ── Tools de orquestacion del pipeline BCI ───────────────────────────────────
 
 
@@ -94,14 +193,17 @@ async def sync_bci_trx(
     sender: str = "bcimail@bci.cl",
 ) -> str:
     """
-    Ejecuta el pipeline completo de BCI: descarga emails de Yahoo, transforma los
-    PDFs de cartolas y sincroniza los movimientos a bci.transacciones (Atlas).
-    Es una capa fina sobre la API HTTP de aia-jobs (:8080).
+    Lanza el pipeline completo de BCI en background y devuelve un `job_id`
+    inmediato. Las 3 fases se ejecutan en orden en una tarea background:
 
-    Las 3 fases se ejecutan en orden y son idempotentes:
       1. /sync-bci-emails    Yahoo IMAP → email.emails
       2. /sync-historical-bci email.emails (PDFs) → bci.cartolas
       3. /sync-trx            bci.cartolas → bci.transacciones (Atlas)
+
+    Esto evita que el cliente MCP (opencode, CLI, etc.) aborte por timeout
+    mientras aia-jobs procesa IMAP + PDF + Atlas, que puede tardar minutos.
+
+    Para seguir el progreso usa `get_bci_job_status(job_id=<id>)`.
 
     Args:
         year:               Año (ej: 2026). 0 = año actual.
@@ -112,103 +214,122 @@ async def sync_bci_trx(
         sender:             Remitente BCI en Yahoo (default: bcimail@bci.cl).
 
     Returns:
-        Resumen con los resultados de cada fase ejecutada.
+        Markdown con `job_id` y el estado inicial del job.
     """
-    import asyncio
-
     if not year:
-        year = date.today().year
+        year = datetime.now().year
     if not month:
-        month = date.today().month
+        month = datetime.now().month
 
-    lines = [f"## Sync BCI TRX {year}-{month:02d}\n"]
+    job_id = uuid.uuid4().hex[:12]
+    await _set_job(job_id, year=year, month=month, sender=sender, batch_size=batch_size)
 
-    # Fase 1: descarga de emails (si no se skipea)
-    if not skip_email_download:
-        lines.append(f"### Fase 1/3 - descarga de emails de `{ sender}` ({year}-{month:02d})…")
-        r1 = await asyncio.to_thread(
-            _jobs_post,
-            "/api/jobs/sync-bci-emails",
-            {"sender": sender, "year": year, "month": month},
+    asyncio.create_task(
+        _run_pipeline(
+            job_id=job_id,
+            year=year,
+            month=month,
+            batch_size=batch_size,
+            skip_email_download=skip_email_download,
+            skip_transform=skip_transform,
+            sender=sender,
         )
-        if err := r1.get("error"):
-            lines.append(f"❌ Error: {err}")
-        else:
-            lines.append(
-                f"✅ Descargados: {r1.get('downloaded', 0)} · "
-                f"Ya existían: {r1.get('already_existed', 0)} · "
-                f"Total buscados: {r1.get('total_searched', 0)}"
-            )
-    else:
-        lines.append("### Fase 1/3 - (omitida) (`skip_email_download=True`)")
-
-    # Fase 2: transformación de PDFs → cartolas
-    if not skip_transform:
-        lines.append("\n### Fase 2/3 - transformacion de PDFs → bci.cartolas…")
-        r2 = await asyncio.to_thread(
-            _jobs_post,
-            "/api/jobs/sync-historical-bci",
-            {"months_back": 0},
-        )
-        if err := r2.get("error"):
-            lines.append(f"❌ Error: {err}")
-        else:
-            lines.append(
-                f"✅ Transformadas: {r2.get('transformed', 0)} · "
-                f"Skipped: {r2.get('skipped', 0)} · "
-                f"Errores: {r2.get('errors', 0)}"
-            )
-    else:
-        lines.append("\n### Fase 2/3 - (omitida) (`skip_transform=True`)")
-
-    # Fase 3: sync de movimientos a Atlas
-    lines.append(f"\n### Fase 3/3 - sync movimientos → bci.transacciones (batch={batch_size})…")
-    r3 = await asyncio.to_thread(
-        _jobs_post,
-        "/api/jobs/sync-trx",
-        {"batch_size": batch_size},
     )
-    if err := r3.get("error"):
-        lines.append(f"❌ Error: {err}")
-    else:
-        lines.append(
-            f"✅ Sincronizadas: {r3.get('synced', 0)} · "
-            f"Duplicadas (skipped): {r3.get('skipped_duplicate', 0)} · "
-            f"Errores: {r3.get('errors', 0)} · "
-            f"Total nuevos: {r3.get('total_new', 0)}"
-        )
 
-    lines.append(f"\nAPI: `{AIA_JOBS_API_URL}`")
-    return "\n".join(lines)
+    return (
+        f"## Sync BCI TRX lanzado\n\n"
+        f"- **job_id**: `{job_id}`\n"
+        f"- **periodo**: {year}-{month:02d}\n"
+        f"- **API**: `{AIA_JOBS_API_URL}`\n"
+        f"- **batch_size**: {batch_size}\n"
+        f"- **fases**: "
+        f"{'sync-bci-emails → ' if not skip_email_download else ''}"
+        f"{'sync-historical-bci → ' if not skip_transform else ''}"
+        f"sync-trx\n\n"
+        f"Consulta el progreso con `get_bci_job_status(job_id=\"{job_id}\")`."
+    )
 
 
 @mcp.tool()
-def get_bci_job_status() -> str:
+def get_bci_job_status(job_id: str = "") -> str:
     """
-    Estado del último job BCI en aia-jobs (instantáneo desde Mongo, sin tocar Yahoo).
+    Estado del pipeline BCI en el MCP.
+
+    - Si `job_id` se entrega: muestra el detalle de ese job local
+      (lanzado por `sync_bci_trx`).
+    - Si `job_id` está vacío: muestra el estado global de aia-jobs (instantáneo
+      desde Mongo, sin tocar Yahoo) más el listado de jobs locales recientes.
 
     Returns:
-        Estado actual: running, current_job, last_run, last_result, progress
-        y total de cartolas en bci.cartolas.
+        Markdown con running, current_job, last_run, last_result, progress
+        y total de cartolas en bci.cartolas, mas jobs locales del MCP.
     """
+    lines: list[str] = []
+
+    if job_id:
+        rec = _JOBS.get(job_id)
+        if not rec:
+            return f"❌ Job `{job_id}` no encontrado en este MCP."
+        lines.append(f"## Job BCI `{job_id}`\n")
+        lines.append(f"- **status**: `{rec.get('status')}`")
+        lines.append(f"- **periodo**: {rec.get('year')}-{rec.get('month'):02d}")
+        lines.append(f"- **created_at**: {rec.get('created_at')}")
+        if rec.get("started_at"):
+            lines.append(f"- **started_at**: {rec.get('started_at')}")
+        if rec.get("finished_at"):
+            lines.append(f"- **finished_at**: {rec.get('finished_at')}")
+        if rec.get("error"):
+            lines.append(f"- **error**: {rec.get('error')}")
+        phases = rec.get("phases", [])
+        if phases:
+            lines.append(f"\n### Fases ({len(phases)})\n")
+            for p in phases:
+                icon = "✅" if p.get("status") == "ok" else ("❌" if p.get("status") == "error" else "🔄")
+                lines.append(f"{icon} **{p.get('name')}** — `{p.get('status')}`")
+                if "finished_at" in p:
+                    lines.append(f"   - finished_at: {p['finished_at']}")
+                if "batch_size" in p:
+                    lines.append(f"   - batch_size: {p['batch_size']}")
+                if res := p.get("result"):
+                    for k, v in res.items():
+                        lines.append(f"   - `{k}`: {v}")
+        return "\n".join(lines)
+
+    # Sin job_id: estado global + listado de jobs locales
     s = _jobs_get("/api/jobs/status")
     if err := s.get("error"):
-        return f"❌ Error consultando aia-jobs: {err}"
+        lines.append(f"❌ Error consultando aia-jobs: {err}")
+    else:
+        lines.append("## Estado jobs BCI (aia-jobs)\n")
+        lines.append(f"**API**: `{AIA_JOBS_API_URL}`")
+        lines.append(f"**Running**: {'🔄 SÍ' if s.get('running') else '✅ no'}")
+        if s.get("current_job"):
+            lines.append(f"**Job actual**: `{s.get('current_job')}`")
+        if s.get("last_run"):
+            lines.append(f"**Última corrida**: {s.get('last_run')}")
+        if s.get("progress"):
+            lines.append(f"**Progreso**: {s.get('progress')}")
+        if s.get("last_result"):
+            lines.append("\n**Último resultado**:")
+            for k, v in s["last_result"].items():
+                lines.append(f"  - `{k}`: {v}")
+        lines.append(f"\n**Total cartolas en bci.cartolas**: {s.get('total_cartolas_bci', 0)}")
 
-    lines = ["## Estado jobs BCI (aia-jobs)\n"]
-    lines.append(f"**API**: `{AIA_JOBS_API_URL}`")
-    lines.append(f"**Running**: {'🔄 SÍ' if s.get('running') else '✅ no'}")
-    if s.get("current_job"):
-        lines.append(f"**Job actual**: `{s.get('current_job')}`")
-    if s.get("last_run"):
-        lines.append(f"**Última corrida**: {s.get('last_run')}")
-    if s.get("progress"):
-        lines.append(f"**Progreso**: {s.get('progress')}")
-    if s.get("last_result"):
-        lines.append("\n**Último resultado**:")
-        for k, v in s["last_result"].items():
-            lines.append(f"  - `{k}`: {v}")
-    lines.append(f"\n**Total cartolas en bci.cartolas**: {s.get('total_cartolas_bci', 0)}")
+    if _JOBS:
+        lines.append(f"\n## Jobs locales en este MCP ({len(_JOBS)})\n")
+        for jid, rec in list(_JOBS.items())[-10:]:
+            icon = {
+                "pending": "⏳",
+                "running": "🔄",
+                "completed": "✅",
+                "error": "❌",
+            }.get(rec.get("status"), "•")
+            lines.append(
+                f"{icon} `{jid}` — {rec.get('status')} — "
+                f"{rec.get('year')}-{rec.get('month', 0):02d} — "
+                f"{len(rec.get('phases', []))} fases"
+            )
+
     return "\n".join(lines)
 
 
